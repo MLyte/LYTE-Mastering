@@ -29,7 +29,7 @@ struct Options {
     intensity: f64,
     preserve_bass: bool,
 }
-const AUTO_TARGETS: [f64; 4] = [-11.0, -9.0, -7.0, -5.0];
+const AUTO_TARGETS: [f64; 5] = [-9.0, -7.0, -5.0, -4.5, -4.0];
 const TRUE_PEAK_CEILING: f64 = -1.0;
 static AUTO_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -541,7 +541,7 @@ async fn start_auto_mastering(
             };
             let raw_path = PathBuf::from(run_mastering(&worker, engine_options)?);
             let raw_measurements = measure(&worker, &raw_path)?;
-            let final_path = folder.join(format!("hard-techno_{target:.0}dB.wav"));
+            let final_path = folder.join(format!("hard-techno_{target:.1}dB.wav"));
             pcm24(
                 &worker,
                 &raw_path,
@@ -608,25 +608,28 @@ fn export_auto_master(
         .filter(|s| s.id == session_id)
         .ok_or("This mastering session is no longer available.")?;
     let target = match variant_id.as_str() {
-        "v0" => -11,
-        "v1" => -9,
-        "v2" => -7,
-        "v3" => -5,
+        "v0" => -9.0,
+        "v1" => -7.0,
+        "v2" => -5.0,
+        "v3" => -4.5,
+        "v4" => -4.0,
         _ => return Err("Unknown master variant.".into()),
     };
-    let source = session.folder.join(format!("hard-techno_{target}dB.wav"));
+    let source = session
+        .folder
+        .join(format!("hard-techno_{target:.1}dB.wav"));
     if !source.is_file() {
         return Err("The selected master is no longer available.".into());
     }
     let mut number = 1;
     let mut destination = session
         .export_folder
-        .join(format!("hard-techno_{target}dB_auto.wav"));
+        .join(format!("hard-techno_{target:.1}dB_auto.wav"));
     while destination.exists() {
         number += 1;
         destination = session
             .export_folder
-            .join(format!("hard-techno_{target}dB_auto_{number}.wav"));
+            .join(format!("hard-techno_{target:.1}dB_auto_{number}.wav"));
     }
     fs::copy(source, &destination).map_err(|_| "Cannot export the selected master.".to_string())?;
     *app.state::<AppState>()
