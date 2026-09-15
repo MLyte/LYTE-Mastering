@@ -17,6 +17,8 @@ mockIPC((cmd, args) => {
   if(cmd === 'plugin:dialog|open') return 'C:\\Audio\\track.wav';
   if(cmd === 'inspect_track') return { path: args.path, name: 'track.wav', extension: 'WAV' };
   if(cmd === 'start_mastering') return new Promise((resolve,reject) => {window.finishMaster = resolve; window.failMaster = reject;});
+  if(cmd === 'start_auto_mastering') return new Promise(resolve => {window.finishAuto = resolve;});
+  if(cmd === 'export_auto_master') return 'C:\\Audio\\hard-techno_-7dB_auto.wav';
 }, { shouldMockEvents: true });
 window.testEmit = (event,payload) => window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event,payload});
 ${js}
@@ -66,4 +68,26 @@ test('native drop event, completion and constrained folder command', async ({ pa
   await page.getByRole('button', {name:/Open folder/}).click()
   expect(await page.evaluate(() => window.testCalls.some(x=>x.cmd==='open_output_folder'))).toBe(true)
   await page.screenshot({path:'tests/artifacts/succeeded.png', fullPage:true})
+})
+
+test('Auto Hard Techno selects a measured variant and exports only on choice', async ({ page }) => {
+  await mount(page)
+  await page.getByRole('button', { name: /Drop a track/ }).click()
+  await expect(page.getByText('track.wav', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: /Auto — Hard Techno/ }).click()
+  await page.getByRole('button', { name: 'MASTER TRACK' }).click()
+  expect(await page.evaluate(() => window.testCalls.some(x => x.cmd === 'start_auto_mastering'))).toBe(true)
+  await page.evaluate(() => window.finishAuto({
+    sessionId:'session-1', sourcePath:'C:\\Temp\\source.wav', source:{integratedLufs:-10,truePeakDbtp:-1,peakFactorDb:8,bassRatioDb:-4}, recommendedId:'v2', recommendation:'Recommended from measured loudness.',
+    variants:[
+      {id:'v0',targetDb:-11,path:'C:\\Temp\\v0.wav',measurements:{integratedLufs:-9,truePeakDbtp:-1,peakFactorDb:7,bassRatioDb:-4},peakFactorLossDb:1,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
+      {id:'v1',targetDb:-9,path:'C:\\Temp\\v1.wav',measurements:{integratedLufs:-8,truePeakDbtp:-1,peakFactorDb:6,bassRatioDb:-4},peakFactorLossDb:2,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
+      {id:'v2',targetDb:-7,path:'C:\\Temp\\v2.wav',measurements:{integratedLufs:-7.8,truePeakDbtp:-1,peakFactorDb:5.5,bassRatioDb:-4},peakFactorLossDb:2.5,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
+      {id:'v3',targetDb:-5,path:'C:\\Temp\\v3.wav',measurements:{integratedLufs:-7,truePeakDbtp:-1,peakFactorDb:3,bassRatioDb:-1},peakFactorLossDb:5,bassChangeDb:3,eligible:false,note:'Outside guardrails.'}
+    ]
+  }))
+  await expect(page.getByText('Auto results ready')).toBeVisible()
+  await expect(page.getByText('Recommended')).toBeVisible()
+  await page.getByRole('button', { name: 'Export selected master' }).click()
+  expect(await page.evaluate(() => window.testCalls.some(x => x.cmd === 'export_auto_master'))).toBe(true)
 })

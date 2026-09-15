@@ -332,3 +332,9 @@ footer span:first-child {
     font-size: 24px;
   }
 }
+.mode-switch { display: grid; grid-template-columns: 1fr 1.4fr; gap: 6px; margin: 26px 0 -6px; }
+.mode-switch button { border: 1px solid #46515e; border-radius: 5px; color: #aab2be; background: #171c23; padding: 10px; font-size: 11px; font-weight: 650; }
+.mode-switch button.active { background: #20312e; border-color: #a4d7c7; color: #d9e8e3; }
+.auto-note { display: grid; gap: 6px; border: 1px solid #384842; border-radius: 6px; background: #15201f; padding: 13px; margin-bottom: 24px; }
+.auto-note strong { color: #a4d7c7; font-size: 12px; }.auto-note span { color: #b7c3c1; font-size: 12px; line-height: 1.45; }
+.variants { display: grid; gap: 8px; margin: 12px 0; }.variant { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; border: 1px solid #3d4855; border-radius: 5px; padding: 10px; cursor: pointer; }.variant.selected { border-color: #a4d7c7; background: #172321; }.variant strong, .variant small { display: block; }.variant small { color: #aab2be; font-size: 10px; margin-top: 3px; line-height: 1.35; }.variant em { color: #a4d7c7; font-style: normal; font-size: 9px; margin-left: 4px; }.variant button, .source-row button { color: #dce8e5; border: 1px solid #53616a; background: transparent; border-radius: 4px; padding: 5px 8px; font-size: 10px; }.source-row { display: flex; gap: 10px; align-items: center; border-bottom: 1px solid #2b313b; padding-bottom: 8px; font-size: 11px; }.source-row b { color: #cde0da; margin-left: auto; }.actions { display: flex; gap: 8px; flex-wrap: wrap; }.export { border-color: #a4d7c7; color: #cfe9df; }
