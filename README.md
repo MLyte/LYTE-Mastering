@@ -81,7 +81,7 @@ Le traitement utilise un répertoire temporaire unique et inscriptible, contenan
 Le résultat est `<original>_mastered_-7.0dB_i0.80_bass-off.wav` à côté du source.
 ## Auto — Hard Techno
 
-Le mode **Auto — Hard Techno** rend dix masters complets depuis une même copie PCM 24 bits du source : chaque cible PhaseLimiter −9, −7, −5, −4,5 et −4 dB est testée avec `Preserve bass` désactivé puis activé. L'intensité est fixée à 1,00 dans ce profil. Ces cibles ne sont pas des promesses de LUFS : après chaque rendu, FFmpeg mesure les LUFS intégrés, le true peak, le facteur de crête et une estimation de la proportion d’énergie entre 30 et 150 Hz.
+Le mode **Auto — Hard Techno** rend quatre masters complets depuis une même copie PCM 24 bits du source : −7, −5 et −4 dB avec `Preserve bass` désactivé, puis la cible provisoirement recommandée avec `Preserve bass` activé. L'intensité est fixée à 1,00 dans ce profil. Ces cibles ne sont pas des promesses de LUFS : après chaque rendu, FFmpeg mesure les LUFS intégrés, le true peak, le facteur de crête et une estimation de la proportion d’énergie entre 30 et 150 Hz.
 
 L'export retenu reprend aussi le nom de base du morceau : `<original>_hard-techno_-4.5dB_bass-on_auto.wav`.
 

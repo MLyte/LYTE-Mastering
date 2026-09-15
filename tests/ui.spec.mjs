@@ -77,7 +77,7 @@ test('Auto Hard Techno selects a measured variant and exports only on choice', a
   await page.getByRole('button', { name: /Auto — Hard Techno/ }).click()
   await page.getByRole('button', { name: 'ANALYSE & MASTER' }).click()
   expect(await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_auto_mastering').args.options)).toEqual({ input: 'C:\\Audio\\track.wav' })
-  await expect(page.getByText('10 complete variants')).toBeVisible()
+  await expect(page.getByText('4 adaptive variants')).toBeVisible()
   await expect(page.locator('#intensity')).toHaveCount(0)
   await expect(page.getByRole('switch')).toHaveCount(0)
   await page.evaluate(() => window.finishAuto({

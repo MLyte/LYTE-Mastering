@@ -29,7 +29,7 @@ struct Options {
     intensity: f64,
     preserve_bass: bool,
 }
-const AUTO_TARGETS: [f64; 5] = [-9.0, -7.0, -5.0, -4.5, -4.0];
+const AUTO_BASE_TARGETS: [f64; 3] = [-7.0, -5.0, -4.0];
 const TRUE_PEAK_CEILING: f64 = -1.0;
 const AUTO_INTENSITY: f64 = 1.0;
 static AUTO_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -382,6 +382,55 @@ fn auto_recommend(source: &Measurements, variants: &mut [AutoVariant]) -> (Strin
         },
     )
 }
+fn render_auto_variant(
+    app: &tauri::AppHandle,
+    source: &Path,
+    folder: &Path,
+    variants: &mut Vec<AutoVariant>,
+    target: f64,
+    preserve_bass: bool,
+) -> Result<(), String> {
+    if app
+        .state::<AppState>()
+        .cancel_requested
+        .load(Ordering::SeqCst)
+    {
+        return Err("Mastering was cancelled.".into());
+    }
+    let index = variants.len();
+    let raw_path = PathBuf::from(run_mastering(
+        app,
+        Options {
+            input: source.to_string_lossy().into(),
+            loudness: target,
+            intensity: AUTO_INTENSITY,
+            preserve_bass,
+        },
+    )?);
+    let raw_measurements = measure(app, &raw_path)?;
+    let bass = if preserve_bass { "on" } else { "off" };
+    let final_path = folder.join(format!("hard-techno_{target:.1}dB_bass-{bass}.wav"));
+    pcm24(
+        app,
+        &raw_path,
+        &final_path,
+        (TRUE_PEAK_CEILING - raw_measurements.true_peak_dbtp).min(0.0),
+    )?;
+    let measurements = measure(app, &final_path)?;
+    let _ = fs::remove_file(raw_path);
+    variants.push(AutoVariant {
+        id: format!("v{index}"),
+        target_db: target,
+        path: final_path.to_string_lossy().into(),
+        measurements,
+        preserve_bass,
+        peak_factor_loss_db: 0.0,
+        bass_change_db: 0.0,
+        eligible: false,
+        note: String::new(),
+    });
+    Ok(())
+}
 fn run_mastering(app: &tauri::AppHandle, options: Options) -> Result<String, String> {
     let input = audio_path(&options.input)?;
     if !options.loudness.is_finite()
@@ -528,47 +577,23 @@ async fn start_auto_mastering(
         pcm24(&worker, &input, &source, 0.0)?;
         let source_measurements = measure(&worker, &source)?;
         let mut variants = Vec::new();
-        for target in AUTO_TARGETS {
-            for preserve_bass in [false, true] {
-                if worker
-                    .state::<AppState>()
-                    .cancel_requested
-                    .load(Ordering::SeqCst)
-                {
-                    return Err("Mastering was cancelled.".into());
-                }
-                let index = variants.len();
-                let engine_options = Options {
-                    input: source.to_string_lossy().into(),
-                    loudness: target,
-                    intensity: AUTO_INTENSITY,
-                    preserve_bass,
-                };
-                let raw_path = PathBuf::from(run_mastering(&worker, engine_options)?);
-                let raw_measurements = measure(&worker, &raw_path)?;
-                let bass = if preserve_bass { "on" } else { "off" };
-                let final_path = folder.join(format!("hard-techno_{target:.1}dB_bass-{bass}.wav"));
-                pcm24(
-                    &worker,
-                    &raw_path,
-                    &final_path,
-                    (TRUE_PEAK_CEILING - raw_measurements.true_peak_dbtp).min(0.0),
-                )?;
-                let measurements = measure(&worker, &final_path)?;
-                let _ = fs::remove_file(raw_path);
-                variants.push(AutoVariant {
-                    id: format!("v{index}"),
-                    target_db: target,
-                    path: final_path.to_string_lossy().into(),
-                    measurements,
-                    preserve_bass,
-                    peak_factor_loss_db: 0.0,
-                    bass_change_db: 0.0,
-                    eligible: false,
-                    note: String::new(),
-                });
-            }
+        for target in AUTO_BASE_TARGETS {
+            render_auto_variant(&worker, &source, &folder, &mut variants, target, false)?;
         }
+        let (first_recommended_id, _) = auto_recommend(&source_measurements, &mut variants);
+        let candidate_target = variants
+            .iter()
+            .find(|variant| variant.id == first_recommended_id)
+            .map(|variant| variant.target_db)
+            .ok_or("The automatic recommendation could not be resolved.")?;
+        render_auto_variant(
+            &worker,
+            &source,
+            &folder,
+            &mut variants,
+            candidate_target,
+            true,
+        )?;
         let (recommended_id, recommendation) = auto_recommend(&source_measurements, &mut variants);
         *worker
             .state::<AppState>()
@@ -629,15 +654,13 @@ fn export_auto_master(
     let mut number = 1;
     let mut destination = session.export_folder.join(format!(
         "{}_hard-techno_{:.1}dB_bass-{bass}_auto.wav",
-        session.export_stem,
-        variant.target_db
+        session.export_stem, variant.target_db
     ));
     while destination.exists() {
         number += 1;
         destination = session.export_folder.join(format!(
             "{}_hard-techno_{:.1}dB_bass-{bass}_auto_{number}.wav",
-            session.export_stem,
-            variant.target_db
+            session.export_stem, variant.target_db
         ));
     }
     fs::copy(source, &destination).map_err(|_| "Cannot export the selected master.".to_string())?;
