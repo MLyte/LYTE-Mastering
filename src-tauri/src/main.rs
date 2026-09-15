@@ -36,6 +36,7 @@ static AUTO_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 struct AutoSession {
     id: String,
+    export_stem: String,
     export_folder: PathBuf,
     variants: Vec<AutoVariant>,
 }
@@ -513,6 +514,11 @@ async fn start_auto_mastering(
     let worker = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<AutoResult, String> {
         let input = audio_path(&options.input)?;
+        let export_stem = input
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .filter(|stem| !stem.is_empty())
+            .ok_or("The input filename cannot be used for export.")?;
         let export_folder = input
             .parent()
             .ok_or("The input folder cannot be located.")?
@@ -570,6 +576,7 @@ async fn start_auto_mastering(
             .lock()
             .map_err(|_| "Cannot record the mastering session.")? = Some(AutoSession {
             id: session_id.clone(),
+            export_stem,
             export_folder,
             variants: variants.clone(),
         });
@@ -621,13 +628,15 @@ fn export_auto_master(
     let bass = if variant.preserve_bass { "on" } else { "off" };
     let mut number = 1;
     let mut destination = session.export_folder.join(format!(
-        "hard-techno_{:.1}dB_bass-{bass}_auto.wav",
+        "{}_hard-techno_{:.1}dB_bass-{bass}_auto.wav",
+        session.export_stem,
         variant.target_db
     ));
     while destination.exists() {
         number += 1;
         destination = session.export_folder.join(format!(
-            "hard-techno_{:.1}dB_bass-{bass}_auto_{number}.wav",
+            "{}_hard-techno_{:.1}dB_bass-{bass}_auto_{number}.wav",
+            session.export_stem,
             variant.target_db
         ));
     }
