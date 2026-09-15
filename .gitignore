@@ -1,0 +1,15 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+bin/*
+!bin/README.md
+resources/phaselimiter/*
+!resources/phaselimiter/README.md
+*.log
+
+.npm-cache/
+.tools/
+
+test-results/
+tests/artifacts/
