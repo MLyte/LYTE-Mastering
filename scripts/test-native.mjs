@@ -52,7 +52,7 @@ try {
   await page.waitForFunction(() => document.body.innerText.includes('Master complete') || document.querySelector('[role=alert]'), null, { timeout: 300000 });
   const error = await page.getByRole('alert').allTextContents();
   if (error.length) throw new Error(error.join('\n'));
-  const output = fixture.replace(/\.(wav|flac|mp3)$/, '_mastered.wav');
+  const output = fixture.replace(/\.(wav|flac|mp3)$/, '_mastered_-8.5dB_i1.00_bass-on.wav');
   if (!fs.existsSync(output)) throw new Error('Output WAV missing');
   const progress = await page.evaluate(() => window.nativeProgress);
   if (!progress.some(v => v > 0 && v < 100)) throw new Error('No intermediate native progress event');

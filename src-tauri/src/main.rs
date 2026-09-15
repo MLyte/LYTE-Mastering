@@ -167,6 +167,14 @@ fn arguments(
     }
     args
 }
+fn output_filename(stem: &str, options: &Options) -> String {
+    let bass = if options.preserve_bass { "on" } else { "off" };
+
+    format!(
+        "{stem}_mastered_{:.1}dB_i{:.2}_bass-{bass}.wav",
+        options.loudness, options.intensity
+    )
+}
 fn run_mastering(app: &tauri::AppHandle, options: Options) -> Result<String, String> {
     let input = audio_path(&options.input)?;
     if !options.loudness.is_finite()
@@ -189,7 +197,7 @@ fn run_mastering(app: &tauri::AppHandle, options: Options) -> Result<String, Str
         .parent()
         .ok_or("The input folder cannot be located.")?;
     let stem = input.file_stem().unwrap().to_string_lossy();
-    let output = parent.join(format!("{stem}_mastered.wav"));
+    let output = parent.join(output_filename(&stem, &options));
     if output.exists() {
         return Err(
             "A master with this name already exists. Rename or move it before mastering again."
@@ -348,6 +356,20 @@ mod tests {
         assert_eq!(progression("progression: 1.2"), Some(100.0));
         assert_eq!(progression("progression: NaN"), None);
         assert_eq!(progression("diagnostic"), None);
+    }
+    #[test]
+    fn includes_mastering_settings_in_output_filename() {
+        let options = Options {
+            input: "C:\\Audio\\LET THE KICK HIT.wav".to_string(),
+            loudness: -7.0,
+            intensity: 0.80,
+            preserve_bass: false,
+        };
+
+        assert_eq!(
+            output_filename("LET THE KICK HIT", &options),
+            "LET THE KICK HIT_mastered_-7.0dB_i0.80_bass-off.wav"
+        );
     }
     #[test]
     fn preserves_upstream_mapping() {

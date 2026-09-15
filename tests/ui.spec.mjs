@@ -61,7 +61,7 @@ test('native drop event, completion and constrained folder command', async ({ pa
   await page.getByRole('button', {name:'MASTER TRACK'}).click()
   await page.evaluate(() => window.testEmit('mastering-progress',100))
   await expect(page.getByRole('progressbar')).toHaveAttribute('value','99')
-  await page.evaluate(() => window.finishMaster('C:\\Audio\\track_mastered.wav'))
+  await page.evaluate(() => window.finishMaster('C:\\Audio\\track_mastered_-8.5dB_i1.00_bass-on.wav'))
   await expect(page.getByText('✓ Master complete')).toBeVisible()
   await page.getByRole('button', {name:/Open folder/}).click()
   expect(await page.evaluate(() => window.testCalls.some(x=>x.cmd==='open_output_folder'))).toBe(true)
