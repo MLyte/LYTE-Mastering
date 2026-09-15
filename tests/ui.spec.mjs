@@ -75,19 +75,24 @@ test('Auto Hard Techno selects a measured variant and exports only on choice', a
   await page.getByRole('button', { name: /Drop a track/ }).click()
   await expect(page.getByText('track.wav', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: /Auto — Hard Techno/ }).click()
-  await page.getByRole('button', { name: 'MASTER TRACK' }).click()
-  expect(await page.evaluate(() => window.testCalls.some(x => x.cmd === 'start_auto_mastering'))).toBe(true)
+  await page.getByRole('button', { name: 'ANALYSE & MASTER' }).click()
+  expect(await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_auto_mastering').args.options)).toEqual({ input: 'C:\\Audio\\track.wav' })
+  await expect(page.getByText('10 complete variants')).toBeVisible()
+  await expect(page.locator('#intensity')).toHaveCount(0)
+  await expect(page.getByRole('switch')).toHaveCount(0)
   await page.evaluate(() => window.finishAuto({
     sessionId:'session-1', sourcePath:'C:\\Temp\\source.wav', source:{integratedLufs:-10,truePeakDbtp:-1,peakFactorDb:8,bassRatioDb:-4}, recommendedId:'v2', recommendation:'Recommended from measured loudness.',
     variants:[
-      {id:'v0',targetDb:-11,path:'C:\\Temp\\v0.wav',measurements:{integratedLufs:-9,truePeakDbtp:-1,peakFactorDb:7,bassRatioDb:-4},peakFactorLossDb:1,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
-      {id:'v1',targetDb:-9,path:'C:\\Temp\\v1.wav',measurements:{integratedLufs:-8,truePeakDbtp:-1,peakFactorDb:6,bassRatioDb:-4},peakFactorLossDb:2,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
-      {id:'v2',targetDb:-7,path:'C:\\Temp\\v2.wav',measurements:{integratedLufs:-7.8,truePeakDbtp:-1,peakFactorDb:5.5,bassRatioDb:-4},peakFactorLossDb:2.5,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
-      {id:'v3',targetDb:-5,path:'C:\\Temp\\v3.wav',measurements:{integratedLufs:-7,truePeakDbtp:-1,peakFactorDb:3,bassRatioDb:-1},peakFactorLossDb:5,bassChangeDb:3,eligible:false,note:'Outside guardrails.'}
+      {id:'v0',targetDb:-11,path:'C:\\Temp\\v0.wav',measurements:{integratedLufs:-9,truePeakDbtp:-1,peakFactorDb:7,bassRatioDb:-4},preserveBass:false,peakFactorLossDb:1,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
+      {id:'v1',targetDb:-9,path:'C:\\Temp\\v1.wav',measurements:{integratedLufs:-8,truePeakDbtp:-1,peakFactorDb:6,bassRatioDb:-4},preserveBass:true,peakFactorLossDb:2,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
+      {id:'v2',targetDb:-7,path:'C:\\Temp\\v2.wav',measurements:{integratedLufs:-7.8,truePeakDbtp:-1,peakFactorDb:5.5,bassRatioDb:-4},preserveBass:false,peakFactorLossDb:2.5,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
+      {id:'v3',targetDb:-5,path:'C:\\Temp\\v3.wav',measurements:{integratedLufs:-7,truePeakDbtp:-1,peakFactorDb:3,bassRatioDb:-1},preserveBass:false,peakFactorLossDb:5,bassChangeDb:3,eligible:false,note:'Outside guardrails.'}
     ]
   }))
   await expect(page.getByText('Auto results ready')).toBeVisible()
-  await expect(page.getByText('Recommended')).toBeVisible()
+  await expect(page.getByText('Recommended', { exact: true })).toBeVisible()
+  await expect(page.locator('.variant small').filter({ hasText: 'Bass off' })).toHaveCount(3)
+  await expect(page.locator('.variant small').filter({ hasText: 'Bass on' })).toHaveCount(1)
   await page.getByRole('button', { name: 'Export selected master' }).click()
   expect(await page.evaluate(() => window.testCalls.some(x => x.cmd === 'export_auto_master'))).toBe(true)
 })

@@ -31,19 +31,18 @@ struct Options {
 }
 const AUTO_TARGETS: [f64; 5] = [-9.0, -7.0, -5.0, -4.5, -4.0];
 const TRUE_PEAK_CEILING: f64 = -1.0;
+const AUTO_INTENSITY: f64 = 1.0;
 static AUTO_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 struct AutoSession {
     id: String,
-    folder: PathBuf,
     export_folder: PathBuf,
+    variants: Vec<AutoVariant>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AutoOptions {
     input: String,
-    intensity: f64,
-    preserve_bass: bool,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +59,7 @@ struct AutoVariant {
     target_db: f64,
     path: String,
     measurements: Measurements,
+    preserve_bass: bool,
     peak_factor_loss_db: f64,
     bass_change_db: f64,
     eligible: bool,
@@ -512,9 +512,6 @@ async fn start_auto_mastering(
         .store(false, Ordering::SeqCst);
     let worker = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<AutoResult, String> {
-        if !options.intensity.is_finite() || !(0.0..=1.0).contains(&options.intensity) {
-            return Err("The mastering intensity is outside the allowed range.".into());
-        }
         let input = audio_path(&options.input)?;
         let export_folder = input
             .parent()
@@ -525,41 +522,46 @@ async fn start_auto_mastering(
         pcm24(&worker, &input, &source, 0.0)?;
         let source_measurements = measure(&worker, &source)?;
         let mut variants = Vec::new();
-        for (index, target) in AUTO_TARGETS.iter().enumerate() {
-            if worker
-                .state::<AppState>()
-                .cancel_requested
-                .load(Ordering::SeqCst)
-            {
-                return Err("Mastering was cancelled.".into());
+        for target in AUTO_TARGETS {
+            for preserve_bass in [false, true] {
+                if worker
+                    .state::<AppState>()
+                    .cancel_requested
+                    .load(Ordering::SeqCst)
+                {
+                    return Err("Mastering was cancelled.".into());
+                }
+                let index = variants.len();
+                let engine_options = Options {
+                    input: source.to_string_lossy().into(),
+                    loudness: target,
+                    intensity: AUTO_INTENSITY,
+                    preserve_bass,
+                };
+                let raw_path = PathBuf::from(run_mastering(&worker, engine_options)?);
+                let raw_measurements = measure(&worker, &raw_path)?;
+                let bass = if preserve_bass { "on" } else { "off" };
+                let final_path = folder.join(format!("hard-techno_{target:.1}dB_bass-{bass}.wav"));
+                pcm24(
+                    &worker,
+                    &raw_path,
+                    &final_path,
+                    (TRUE_PEAK_CEILING - raw_measurements.true_peak_dbtp).min(0.0),
+                )?;
+                let measurements = measure(&worker, &final_path)?;
+                let _ = fs::remove_file(raw_path);
+                variants.push(AutoVariant {
+                    id: format!("v{index}"),
+                    target_db: target,
+                    path: final_path.to_string_lossy().into(),
+                    measurements,
+                    preserve_bass,
+                    peak_factor_loss_db: 0.0,
+                    bass_change_db: 0.0,
+                    eligible: false,
+                    note: String::new(),
+                });
             }
-            let engine_options = Options {
-                input: source.to_string_lossy().into(),
-                loudness: *target,
-                intensity: options.intensity,
-                preserve_bass: options.preserve_bass,
-            };
-            let raw_path = PathBuf::from(run_mastering(&worker, engine_options)?);
-            let raw_measurements = measure(&worker, &raw_path)?;
-            let final_path = folder.join(format!("hard-techno_{target:.1}dB.wav"));
-            pcm24(
-                &worker,
-                &raw_path,
-                &final_path,
-                (TRUE_PEAK_CEILING - raw_measurements.true_peak_dbtp).min(0.0),
-            )?;
-            let measurements = measure(&worker, &final_path)?;
-            let _ = fs::remove_file(raw_path);
-            variants.push(AutoVariant {
-                id: format!("v{index}"),
-                target_db: *target,
-                path: final_path.to_string_lossy().into(),
-                measurements,
-                peak_factor_loss_db: 0.0,
-                bass_change_db: 0.0,
-                eligible: false,
-                note: String::new(),
-            });
         }
         let (recommended_id, recommendation) = auto_recommend(&source_measurements, &mut variants);
         *worker
@@ -568,8 +570,8 @@ async fn start_auto_mastering(
             .lock()
             .map_err(|_| "Cannot record the mastering session.")? = Some(AutoSession {
             id: session_id.clone(),
-            folder,
             export_folder,
+            variants: variants.clone(),
         });
         Ok(AutoResult {
             session_id,
@@ -607,29 +609,27 @@ fn export_auto_master(
         .as_ref()
         .filter(|s| s.id == session_id)
         .ok_or("This mastering session is no longer available.")?;
-    let target = match variant_id.as_str() {
-        "v0" => -9.0,
-        "v1" => -7.0,
-        "v2" => -5.0,
-        "v3" => -4.5,
-        "v4" => -4.0,
-        _ => return Err("Unknown master variant.".into()),
-    };
-    let source = session
-        .folder
-        .join(format!("hard-techno_{target:.1}dB.wav"));
+    let variant = session
+        .variants
+        .iter()
+        .find(|variant| variant.id == variant_id)
+        .ok_or("Unknown master variant.")?;
+    let source = PathBuf::from(&variant.path);
     if !source.is_file() {
         return Err("The selected master is no longer available.".into());
     }
+    let bass = if variant.preserve_bass { "on" } else { "off" };
     let mut number = 1;
-    let mut destination = session
-        .export_folder
-        .join(format!("hard-techno_{target:.1}dB_auto.wav"));
+    let mut destination = session.export_folder.join(format!(
+        "hard-techno_{:.1}dB_bass-{bass}_auto.wav",
+        variant.target_db
+    ));
     while destination.exists() {
         number += 1;
-        destination = session
-            .export_folder
-            .join(format!("hard-techno_{target:.1}dB_auto_{number}.wav"));
+        destination = session.export_folder.join(format!(
+            "hard-techno_{:.1}dB_bass-{bass}_auto_{number}.wav",
+            variant.target_db
+        ));
     }
     fs::copy(source, &destination).map_err(|_| "Cannot export the selected master.".to_string())?;
     *app.state::<AppState>()

@@ -81,7 +81,7 @@ Le traitement utilise un répertoire temporaire unique et inscriptible, contenan
 Le résultat est `<original>_mastered_-7.0dB_i0.80_bass-off.wav` à côté du source.
 ## Auto — Hard Techno
 
-Le mode **Auto — Hard Techno** rend cinq masters complets depuis une même copie PCM 24 bits du source, avec les cibles PhaseLimiter −9, −7, −5, −4,5 et −4 dB. Ces cibles ne sont pas des promesses de LUFS : après chaque rendu, FFmpeg mesure les LUFS intégrés, le true peak, le facteur de crête et une estimation de la proportion d’énergie entre 30 et 150 Hz.
+Le mode **Auto — Hard Techno** rend dix masters complets depuis une même copie PCM 24 bits du source : chaque cible PhaseLimiter −9, −7, −5, −4,5 et −4 dB est testée avec `Preserve bass` désactivé puis activé. L'intensité est fixée à 1,00 dans ce profil. Ces cibles ne sont pas des promesses de LUFS : après chaque rendu, FFmpeg mesure les LUFS intégrés, le true peak, le facteur de crête et une estimation de la proportion d’énergie entre 30 et 150 Hz.
 
 Avant comparaison, LYTE atténue uniquement les rendus qui dépassent −1 dBTP, puis mesure à nouveau le fichier exportable. Il recommande le rendu le plus fort parmi ceux dont la perte de facteur de crête est au plus 3 dB et dont la variation du grave reste dans ±2 dB ; à moins de 0,3 LU, il retient la variante la moins poussée. Si aucune variante ne respecte ces seuils initiaux, la recommandation indique qu’elle doit être vérifiée à l’écoute. Les seuils sont des heuristiques, pas une norme du hard techno.
 
