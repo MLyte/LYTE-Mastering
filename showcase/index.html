@@ -140,12 +140,12 @@
             <figure class="process-diagram">
               <div class="diagram-source">Un même mix</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-targets"><b>−7&nbsp;dB</b><b>−5&nbsp;dB</b><b>−4&nbsp;dB</b></div>
+              <div class="diagram-targets"><b>Départ prudent</b><b>+1&nbsp;dB</b><b>Affinage +0,5&nbsp;dB</b></div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
               <div class="diagram-result">Mesure → plafond −1&nbsp;dBTP</div>
-              <figcaption>Trois cibles par défaut, trois rendus mesurés.</figcaption>
+              <figcaption>Le nombre d&rsquo;essais s&rsquo;adapte aux mesures du morceau.</figcaption>
             </figure>
-            <p><a class="source-link" href="https://github.com/ai-mastering/phaselimiter">PhaseLimiter</a> calcule <strong>trois variantes à intensité 1,00</strong>. Les cibles de −7, −5 et −4&nbsp;dB sont modifiables dans les paramètres.</p>
+            <p><a class="source-link" href="https://github.com/ai-mastering/phaselimiter">PhaseLimiter</a> part d&rsquo;une cible prudente calculée depuis le morceau, puis <strong>monte par pas de 1&nbsp;dB à intensité 1,00</strong>. Près de la limite, il affine par pas de 0,5&nbsp;dB.</p>
             <p>Chaque sortie est mesurée en LUFS intégrés, puis atténuée si nécessaire pour viser un <strong>plafond de −1&nbsp;dBTP</strong>.</p>
             <p>Le niveau final peut différer de la cible : vous comparez plusieurs degrés de traitement sur le même mix.</p>
           </li>
@@ -158,22 +158,22 @@
               <div class="diagram-result">Candidat retenu → test Preserve bass</div>
               <figcaption>Seuils de sélection, pas des mesures de votre morceau.</figcaption>
             </figure>
-            <p>L’app teste <strong>Preserve bass sur le premier candidat retenu</strong>, soit quatre rendus au total.</p>
-            <p>Elle privilégie une perte de facteur de crête de <strong>3&nbsp;dB maximum</strong> et un niveau relatif du grave, estimé entre <strong>30 et 150&nbsp;Hz</strong>, à <strong>±2&nbsp;dB du mix source</strong>.</p>
-            <p>Ces garde-fous surveillent la dynamique globale et le poids du bas. Ils ne mesurent pas à eux seuls l’attaque du kick ni la séparation kick / rumble.</p>
+            <p>L&rsquo;app arrête la montée lorsque le niveau plafonne ou qu&rsquo;un garde-fou est franchi, puis teste <strong>Preserve bass sur le meilleur candidat mesuré</strong>.</p>
+            <p>Elle exige une perte de facteur de crête de <strong>3&nbsp;dB maximum</strong>, un grave entre <strong>30 et 150&nbsp;Hz</strong> à <strong>±2&nbsp;dB du mix source</strong> et un test AAC à <strong>0&nbsp;dBTP ou moins</strong>.</p>
+            <p>Ces garde-fous surveillent la dynamique globale, le poids du bas et les crêtes après encodage. Ils ne mesurent pas à eux seuls l&rsquo;attaque du kick ni la séparation kick / rumble.</p>
           </li>
           <li>
             <span>03</span><h3>Arbitrer à l’écoute</h3>
             <figure class="process-diagram">
-              <div class="diagram-source">Source + quatre variantes</div>
+              <div class="diagram-source">Source + variantes mesurées</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
               <div class="diagram-result">Préécoute au niveau du plus faible</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
               <div class="diagram-result">Écouter → choisir → exporter</div>
               <figcaption>Le gain de préécoute est ajusté, les fichiers restent inchangés.</figcaption>
             </figure>
-            <p>Un <strong>score interne de loudness, true peak, facteur de crête et équilibre du grave</strong> départage les variantes admissibles.</p>
-            <p>Si aucune ne respecte les garde-fous, l’app propose celle à la cible la moins élevée.</p>
+            <p>Un indicateur d&rsquo;<strong>équilibre technique</strong> combine niveau, true peak, facteur de crête, grave et sécurité AAC pour départager les variantes admissibles.</p>
+            <p>Si aucune ne respecte tous les garde-fous, LYTE montre seulement le candidat le moins agressif et indique que conserver la source ou revoir le mix est plus sûr.</p>
             <p>La préécoute ajuste les niveaux pour comparer <strong>l’attaque, la texture de saturation et la lisibilité du rumble</strong>. La recommandation guide l’écoute ; elle ne certifie pas la qualité du master.</p>
           </li>
         </ol>
@@ -185,7 +185,20 @@
 
       <section class="technical section" id="technical" aria-labelledby="technical-title">
         <div class="section-heading"><p class="eyebrow"><span></span> Conçu pour les producteurs</p><h2 id="technical-title">Des réglages lisibles.<br /><em>Des choix qui restent les vôtres.</em></h2><p>LYTE Mastering pilote <strong>PhaseLimiter en local</strong> : vous gardez la main sur la <strong>cible, l’intensité et le grave</strong>, sans vous enfermer dans un préréglage opaque.</p></div>
-        <div class="technical-grid">
+        <div class="feature-overview" aria-labelledby="feature-overview-title">
+          <p id="feature-overview-title">TRAITEMENT AUDIO</p>
+          <ul class="feature-row">
+            <li><strong>PhaseLimiter local</strong><span>Le moteur analyse et traite le morceau sur votre machine.</span></li>
+            <li><strong>Cible & intensité</strong><span>Deux réglages indépendants pour doser niveau et traitement.</span></li>
+            <li><strong>Recherche progressive</strong><span>Le mode Auto monte le niveau jusqu&rsquo;à trouver la meilleure zone mesurée.</span></li>
+            <li><strong>Écoute à niveau égal</strong><span>Les variantes sont abaissées pour comparer leur caractère sonore.</span></li>
+            <li><strong>Preserve bass</strong><span>Une pondération qui donne plus de priorité au bas du spectre.</span></li>
+            <li><strong>Grave dynamique</strong><span>Un contrôle léger sous 150 Hz pour limiter les débordements.</span></li>
+            <li><strong>Soft clip optionnel</strong><span>De 0 à 2 dB pour arrondir certaines crêtes brèves.</span></li>
+            <li><strong>Plafond true peak</strong><span>Le master exporté est plafonné à −1 dBTP.</span></li>
+            <li><strong>Mesures après export</strong><span>LUFS, dBTP, facteur de crête, grave et contrôle AAC local.</span></li>
+          </ul>
+        </div>        <div class="technical-grid">
           <article>
             <div class="tech-top"><span>01</span></div><h3>Cible & intensité</h3>
             <figure class="process-diagram">
@@ -216,17 +229,17 @@
           <article>
             <div class="tech-top"><span>03</span></div><h3>Auto — Hard Techno</h3>
             <figure class="process-diagram">
-              <div class="diagram-targets"><b>−7&nbsp;dB</b><b>−5&nbsp;dB</b><b>−4&nbsp;dB</b></div>
-              <div class="diagram-source">Trois rendus · Preserve bass OFF</div>
+              <div class="diagram-targets"><b>Départ prudent</b><b>+1&nbsp;dB</b><b>Affinage +0,5&nbsp;dB</b></div>
+              <div class="diagram-source">Recherche adaptative · Preserve bass OFF</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Candidat retenu → quatrième rendu bass ON</div>
+              <div class="diagram-result">Meilleur candidat → vérification bass ON</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Mesurer et comparer les quatre rendus</div>
-              <figcaption>Cibles par défaut, modifiables dans les paramètres.</figcaption>
+              <div class="diagram-result">Mesurer et classer tous les rendus</div>
+              <figcaption>Départ, arrêt et affinage déterminés par les mesures.</figcaption>
             </figure>
-            <p><strong>Trois cibles sont testées</strong>, puis le premier candidat retenu est recalculé avec Preserve bass : quatre masters au total.</p>
+            <p><strong>Le nombre de cibles varie selon le morceau</strong> : montée par pas de 1&nbsp;dB, affinage éventuel à 0,5&nbsp;dB, puis vérification du meilleur candidat avec Preserve bass.</p>
             <p>LYTE Mastering compare le <strong>LUFS intégré, le true peak, le facteur de crête</strong> et une estimation du niveau relatif du grave entre <strong>30 et 150&nbsp;Hz</strong>.</p>
-            <small>4 VARIANTS · FFmpeg EBU R128</small>
+            <small>RECHERCHE ADAPTATIVE · FFmpeg EBU R128</small>
           </article>
         </div>
       </section>

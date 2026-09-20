@@ -209,3 +209,19 @@ nav a:hover, .text-link:hover, .all-releases:hover, footer > a:last-child:hover 
 .currency { color: #a4d7c7; }
 .site-header .language-switch { border-color: #46515e; }.language-switch a { color: #aab2be; }.language-switch a:hover { background: #20312e; color: #d8f3e9; }.language-switch a[aria-current="page"] { background: #a4d7c7; color: #11251e; }
 a:focus-visible { outline-color: #a4d7c7; }
+
+/* Compact overview of every major application capability. */
+.feature-overview { margin-top: 48px; }
+.feature-overview > p { margin: 0 0 14px; color: #a4d7c7; font: 600 11px/1 "DM Mono", monospace; letter-spacing: .12em; }
+.feature-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 0; border: 1px solid #46515e; border-radius: 6px; list-style: none; overflow: hidden; }
+.feature-row li { min-height: 112px; padding: 18px 20px; background: #151c20; border-right: 1px solid #46515e; border-bottom: 1px solid #46515e; }
+.feature-row li:nth-child(3n) { border-right: 0; }
+.feature-row li:nth-last-child(-n + 3) { border-bottom: 0; }
+.feature-row strong { display: block; color: #d8f3e9; font-size: 15px; line-height: 1.2; }
+.feature-row span { display: block; margin-top: 8px; color: #aab2be; font-size: 13px; line-height: 1.48; }
+@media (max-width: 800px) {
+  .feature-overview { margin-top: 36px; }
+  .feature-row { grid-template-columns: 1fr; }
+  .feature-row li, .feature-row li:nth-child(3n), .feature-row li:nth-last-child(-n + 3) { min-height: 0; border-right: 0; border-bottom: 1px solid #46515e; }
+  .feature-row li:last-child { border-bottom: 0; }
+}

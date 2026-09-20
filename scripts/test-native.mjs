@@ -46,7 +46,7 @@ try {
   await page.getByText('test track.' + format, { exact: true }).waitFor();
   await page.locator('#loudness').fill('-8.5');
   await page.locator('#intensity').fill('1');
-  await page.getByRole('switch').check();
+  await page.locator('#bass').check();
   const start = Date.now();
   await page.getByRole('button', { name: 'MASTER TRACK' }).click();
   await page.waitForFunction(() => document.body.innerText.includes('Master complete') || document.querySelector('[role=alert]'), null, { timeout: 300000 });
@@ -54,10 +54,14 @@ try {
   if (error.length) throw new Error(error.join('\n'));
   const output = fixture.replace(/\.(wav|flac|mp3)$/, '_mastered_-8.5dB_i1.00_bass-on.wav');
   if (!fs.existsSync(output)) throw new Error('Output WAV missing');
+  await page.getByText(/AAC/).waitFor();
   const progress = await page.evaluate(() => window.nativeProgress);
   if (!progress.some(v => v > 0 && v < 100)) throw new Error('No intermediate native progress event');
   execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-f', 'null', '-'], { windowsHide: true });
   await page.screenshot({ path: path.join(work, 'complete.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Start over' }).click();
+  await page.evaluate(input => window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event: 'tauri://drag-drop', payload: { paths: [input], position: { x: 100, y: 100 } } }), fixture);
+  await page.getByText('test track.' + format, { exact: true }).waitFor();
   await page.getByRole('button', { name: 'MASTER TRACK' }).click();
   await page.getByRole('alert').filter({ hasText: 'already exists' }).waitFor();
   const report = { app: appPath, input: fixture, output, seconds: (Date.now() - start) / 1000, progressCount: progress.length, progressMin: Math.min(...progress), progressMax: Math.max(...progress), bytes: fs.statSync(output).size, noOverwrite: true };

@@ -84,7 +84,6 @@ h1 span {
 .help-link { display: inline-flex; align-items: center; gap: 6px; margin: 13px 0 -10px; padding: 5px 0; border: 0; background: transparent; color: #a4d7c7; font-size: 11px; font-weight: 650; }
 .utility-links { display: flex; align-items: center; gap: 18px; }
 .utility-links .help-link { margin-right: 0; }
-.settings-modal { width: min(560px, 100%); }
 .help-link:hover { color: #d8f3e9; }
 .help-link svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .help-link > span { color: #90a39e; font-size: 14px; line-height: 1; }
@@ -381,19 +380,13 @@ footer span:first-child {
 .mode-switch button.active { background: #20312e; border-color: #a4d7c7; color: #d9e8e3; }
 .auto-note { display: grid; gap: 6px; border: 1px solid #384842; border-radius: 6px; background: #15201f; padding: 13px; margin-bottom: 24px; }
 .auto-note strong { color: #a4d7c7; font-size: 12px; }.auto-note span { color: #b7c3c1; font-size: 12px; line-height: 1.45; }
-.auto-targets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 16px; }
-.auto-targets label { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 7px; align-items: center; color: #c7d7d2; font-size: 11px; font-weight: 650; }
-.auto-targets input { grid-column: 1; width: 100%; min-width: 0; border: 1px solid #53616a; border-radius: 4px; background: #10181a; color: #e3efeb; padding: 8px; font-variant-numeric: tabular-nums; }
-.auto-targets span { grid-column: 2; grid-row: 2; color: #95aaa3; font-size: 10px; }
-.restore-auto-targets { margin-top: 16px; }
-@media (max-width: 420px) { .auto-targets { grid-template-columns: 1fr; } .auto-targets label { grid-template-columns: minmax(0, 1fr) auto; } }
 .variants { display: grid; gap: 8px; margin: 12px 0; }.variant { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; border: 1px solid #3d4855; border-radius: 5px; padding: 10px; cursor: pointer; }.variant.selected { border-color: #a4d7c7; background: #172321; }.variant strong, .variant small { display: block; }.variant small { color: #aab2be; font-size: 10px; margin-top: 3px; line-height: 1.35; }.variant em { color: #a4d7c7; font-style: normal; font-size: 9px; margin-left: 4px; }.variant button, .source-row button { color: #dce8e5; border: 1px solid #53616a; background: transparent; border-radius: 4px; padding: 5px 8px; font-size: 10px; }.source-row { display: flex; gap: 10px; align-items: center; border-bottom: 1px solid #2b313b; padding-bottom: 8px; font-size: 11px; }.source-row b { color: #cde0da; margin-left: auto; }.actions { display: flex; gap: 8px; flex-wrap: wrap; }.export { border-color: #a4d7c7; color: #cfe9df; }
-.professionality { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; align-items: baseline; margin-top: 9px; padding: 8px 9px; border-left: 2px solid #7fc4ae; background: #13201e; border-radius: 3px; font-variant-numeric: tabular-nums; }
-.professionality > span { color: #d6e5e0; font-size: 10px; font-weight: 650; }
-.professionality > span small { display: inline; color: #90a39e; font-size: 9px; font-weight: 400; margin: 0; }
-.professionality b { color: #dff0ea; font-size: 12px; }
-.professionality b i { color: #94aaa4; font-size: 9px; font-style: normal; font-weight: 400; margin-left: 2px; }
-.professionality em { grid-column: 1 / -1; color: #a4d7c7; font-size: 10px; font-style: normal; font-weight: 650; }
+.technical-balance { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; align-items: baseline; margin-top: 9px; padding: 8px 9px; border-left: 2px solid #7fc4ae; background: #13201e; border-radius: 3px; font-variant-numeric: tabular-nums; }
+.technical-balance > span { color: #d6e5e0; font-size: 10px; font-weight: 650; }
+.technical-balance > span small { display: inline; color: #90a39e; font-size: 9px; font-weight: 400; margin: 0; }
+.technical-balance b { color: #dff0ea; font-size: 12px; }
+.technical-balance b i { color: #94aaa4; font-size: 9px; font-style: normal; font-weight: 400; margin-left: 2px; }
+.technical-balance em { grid-column: 1 / -1; color: #a4d7c7; font-size: 10px; font-style: normal; font-weight: 650; }
 .metric-note { margin: 8px 0 12px; color: #8d9b9f !important; font-size: 10px !important; line-height: 1.4 !important; }.recommendation { margin: 10px 0; padding: 9px 10px; border-left: 2px solid #a4d7c7; border-radius: 3px; background: #13201e; color: #b9c9c4; font-size: 10px; line-height: 1.45; }
 .recommendation strong { display: block; margin-bottom: 4px; color: #d6e5e0; font-size: 11px; }
 .recommendation p { margin: 0; }
@@ -401,6 +394,8 @@ footer span:first-child {
 .mastering-profile span { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 5px; color: #aab2be; font-size: 9px; }
 .mastering-profile i { height: 4px; overflow: hidden; background: #29333c; border-radius: 99px; }
 .mastering-profile b { display: block; height: 100%; min-width: 2px; background: #7fc4ae; border-radius: inherit; }
+.mastering-profile b.unsafe { background: #d28b78; }
+.mastering-profile span > small { grid-column: 1 / -1; color: #91a19e; font-size: 8px; }
 
 audio { display: none; }
 
@@ -486,9 +481,9 @@ input[type="range"] { height: 24px; }
 .mode-switch button { padding: 12px; font-size: 13px; }
 .auto-note strong, .auto-note span { font-size: 14px; }
 .variant { gap: 12px; padding: 12px; }
-.variant small, .variant em, .variant button, .source-row button, .professionality > span, .professionality > span small, .professionality b i, .professionality em, .metric-note, .recommendation, .mastering-profile span, .track-summary span, .track-summary small, .text-button { font-size: 12px !important; }
+.variant small, .variant em, .variant button, .source-row button, .technical-balance > span, .technical-balance > span small, .technical-balance b i, .technical-balance em, .metric-note, .recommendation, .mastering-profile span, .track-summary span, .track-summary small, .text-button { font-size: 12px !important; }
 .source-row, .recommendation strong, .track-summary strong { font-size: 14px; }
-.professionality b { font-size: 14px; }
+.technical-balance b { font-size: 14px; }
 .text-button { padding: 9px 11px; }
 @media (max-width: 540px) {
   main { padding: 28px 24px 24px; }

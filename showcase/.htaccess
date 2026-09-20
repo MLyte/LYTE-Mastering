@@ -1,0 +1,3 @@
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://mastering.mathieuluyten.be%{REQUEST_URI} [R=301,L]

@@ -140,12 +140,12 @@
             <figure class="process-diagram">
               <div class="diagram-source">The same mix</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-targets"><b>−7&nbsp;dB</b><b>−5&nbsp;dB</b><b>−4&nbsp;dB</b></div>
+              <div class="diagram-targets"><b>Cautious start</b><b>+1&nbsp;dB</b><b>+0.5&nbsp;dB refine</b></div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
               <div class="diagram-result">Measure → −1&nbsp;dBTP ceiling</div>
-              <figcaption>Three default targets, three measured renders.</figcaption>
+              <figcaption>The number of trials adapts to the track measurements.</figcaption>
             </figure>
-            <p><a class="source-link" href="https://github.com/ai-mastering/phaselimiter">PhaseLimiter</a> calculates <strong>three variants at an intensity of 1.00</strong>. You can change the −7, −5 and −4&nbsp;dB targets in the settings.</p>
+            <p><a class="source-link" href="https://github.com/ai-mastering/phaselimiter">PhaseLimiter</a> starts from a cautious target derived from the track, then <strong>moves up in 1&nbsp;dB steps at an intensity of 1.00</strong>. Near the boundary, it refines by 0.5&nbsp;dB.</p>
             <p>Each output is measured in integrated LUFS, then attenuated if needed to aim for a <strong>−1&nbsp;dBTP ceiling</strong>.</p>
             <p>The final level may differ from the target: you are comparing different amounts of processing on the same mix.</p>
           </li>
@@ -158,22 +158,22 @@
               <div class="diagram-result">Selected candidate → Preserve bass test</div>
               <figcaption>Selection thresholds, not measurements of your track.</figcaption>
             </figure>
-            <p>The app tests <strong>Preserve bass on the first selected candidate</strong>, making four renders in total.</p>
-            <p>It favours a peak-factor loss of <strong>no more than 3&nbsp;dB</strong> and a relative low-end level, estimated between <strong>30 and 150&nbsp;Hz</strong>, within <strong>±2&nbsp;dB of the source mix</strong>.</p>
-            <p>These guardrails monitor overall dynamics and low-end weight. On their own, they do not measure kick attack or separation between kick and rumble.</p>
+            <p>The app stops raising the target when loudness plateaus or a guardrail is crossed, then tests <strong>Preserve bass on the best measured candidate</strong>.</p>
+            <p>It requires a peak-factor loss of <strong>no more than 3&nbsp;dB</strong>, low end between <strong>30 and 150&nbsp;Hz</strong> within <strong>±2&nbsp;dB of the source mix</strong>, and an AAC test at <strong>0&nbsp;dBTP or below</strong>.</p>
+            <p>These guardrails monitor overall dynamics, low-end weight and post-encoding peaks. On their own, they do not measure kick attack or separation between kick and rumble.</p>
           </li>
           <li>
             <span>03</span><h3>Making the listening decision</h3>
             <figure class="process-diagram">
-              <div class="diagram-source">Source + four variants</div>
+              <div class="diagram-source">Source + measured variants</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
               <div class="diagram-result">Preview at the quietest version’s level</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
               <div class="diagram-result">Listen → choose → export</div>
               <figcaption>Preview gain is adjusted; the files remain unchanged.</figcaption>
             </figure>
-            <p>An <strong>internal score combining loudness, true peak, peak factor and low-end balance</strong> ranks eligible variants.</p>
-            <p>If none meets the guardrails, the app suggests the variant with the lowest target.</p>
+            <p>A <strong>technical-balance indicator</strong> combines level, true peak, peak factor, low end and AAC safety to rank eligible variants.</p>
+            <p>If none meets every guardrail, LYTE only shows the least aggressive candidate and says that keeping the source or revisiting the mix is safer.</p>
             <p>Level-adjusted preview lets you compare <strong>attack, saturation texture and rumble definition</strong>. The recommendation guides listening; it does not certify the quality of the master.</p>
           </li>
         </ol>
@@ -185,7 +185,20 @@
 
       <section class="technical section" id="technical" aria-labelledby="technical-title">
         <div class="section-heading"><p class="eyebrow"><span></span> Built for producers</p><h2 id="technical-title">Clear controls.<br /><em>The choices stay yours.</em></h2><p>LYTE Mastering runs <strong>PhaseLimiter locally</strong>: you stay in control of the <strong>target, intensity and low end</strong>, without being locked into an opaque preset.</p></div>
-        <div class="technical-grid">
+        <div class="feature-overview" aria-labelledby="feature-overview-title">
+          <p id="feature-overview-title">AUDIO PROCESSING</p>
+          <ul class="feature-row">
+            <li><strong>Local PhaseLimiter</strong><span>The engine analyses and processes the track on your machine.</span></li>
+            <li><strong>Target & intensity</strong><span>Two independent controls for level and processing amount.</span></li>
+            <li><strong>Progressive search</strong><span>Auto mode raises the level until it finds the best measured zone.</span></li>
+            <li><strong>Level-matched listening</strong><span>Variants are attenuated to compare their sonic character.</span></li>
+            <li><strong>Preserve bass</strong><span>A weighting option that gives more priority to the low end.</span></li>
+            <li><strong>Dynamic low end</strong><span>Gentle control below 150 Hz to limit excessive buildup.</span></li>
+            <li><strong>Optional soft clip</strong><span>From 0 to 2 dB to round selected short peaks.</span></li>
+            <li><strong>True-peak ceiling</strong><span>The exported master is capped at −1 dBTP.</span></li>
+            <li><strong>Post-export measurements</strong><span>LUFS, dBTP, crest factor, low end and a local AAC check.</span></li>
+          </ul>
+        </div>        <div class="technical-grid">
           <article>
             <div class="tech-top"><span>01</span></div><h3>Target & intensity</h3>
             <figure class="process-diagram">
@@ -216,17 +229,17 @@
           <article>
             <div class="tech-top"><span>03</span></div><h3>Auto — Hard Techno</h3>
             <figure class="process-diagram">
-              <div class="diagram-targets"><b>−7&nbsp;dB</b><b>−5&nbsp;dB</b><b>−4&nbsp;dB</b></div>
-              <div class="diagram-source">Three renders · Preserve bass OFF</div>
+              <div class="diagram-targets"><b>Cautious start</b><b>+1&nbsp;dB</b><b>+0.5&nbsp;dB refine</b></div>
+              <div class="diagram-source">Adaptive search · Preserve bass OFF</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Selected candidate → fourth render with bass ON</div>
+              <div class="diagram-result">Best candidate → bass ON verification</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Measure and compare all four renders</div>
-              <figcaption>Default targets, adjustable in the settings.</figcaption>
+              <div class="diagram-result">Measure and rank every render</div>
+              <figcaption>Start, stop and refinement are driven by measurements.</figcaption>
             </figure>
-            <p><strong>Three targets are tested</strong>, then the first selected candidate is rendered again with Preserve bass: four masters in total.</p>
+            <p><strong>The target count varies with the track</strong>: 1&nbsp;dB steps, an optional 0.5&nbsp;dB refinement, then a Preserve bass verification of the best candidate.</p>
             <p>LYTE Mastering compares <strong>integrated LUFS, true peak and peak factor</strong>, plus an estimate of relative low-end level between <strong>30 and 150&nbsp;Hz</strong>.</p>
-            <small>4 VARIANTS · FFmpeg EBU R128</small>
+            <small>ADAPTIVE SEARCH · FFmpeg EBU R128</small>
           </article>
         </div>
       </section>
