@@ -1,5 +1,5 @@
 const repository = "MLyte/LYTE-Mastering";
-const fallback = `https://github.com/${repository}/releases/latest`;
+const fallback = `https://github.com/${repository}/releases`;
 const status = document.querySelector("[data-download-status]");
 const version = document.querySelector("[data-release-version]");
 const date = document.querySelector("[data-release-date]");
@@ -16,11 +16,13 @@ function formatDate(value) {
 
 async function loadRelease() {
   try {
-    const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, {
+    const response = await fetch(`https://api.github.com/repos/${repository}/releases?per_page=10`, {
       headers: { Accept: "application/vnd.github+json" }
     });
     if (!response.ok) throw new Error(`GitHub a répondu ${response.status}`);
-    const release = await response.json();
+    const releases = await response.json();
+    const release = releases.find((candidate) => !candidate.draft);
+    if (!release) throw new Error("Aucune release publiée n’est disponible");
     const installer = release.assets.find((asset) => /\.exe$/i.test(asset.name));
     const destination = installer?.browser_download_url || release.html_url || fallback;
     setDownload(destination);
