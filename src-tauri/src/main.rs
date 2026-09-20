@@ -10,7 +10,7 @@ use std::{
         Mutex,
     },
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
 
@@ -784,10 +784,21 @@ fn run_mastering(app: &tauri::AppHandle, options: Options) -> Result<String, Str
     let b = app.clone();
     let out_thread = thread::spawn(move || drain(stdout, a));
     let err_thread = thread::spawn(move || drain(stderr, b));
-    let result = child.wait();
+    let result = loop {
+        if app.state::<AppState>().cancel_requested.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break Err("Mastering was cancelled.".to_string());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(_) => break Err("Could not wait for PhaseLimiter to finish.".to_string()),
+        }
+    };
     let _ = out_thread.join();
     let _ = err_thread.join();
-    let result = result.map_err(|_| "Could not wait for PhaseLimiter to finish.".to_string())?;
+    let result = result?;
     if !result.success() {
         eprintln!("PhaseLimiter exit: {result}");
         return Err("Mastering failed. Check the audio file, the matching PhaseLimiter cache, its DLLs and available memory. Technical details are in the development console.".into());
