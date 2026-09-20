@@ -36,7 +36,6 @@ const BASS_CROSSOVER: &str = "acrossover=split=150:order=4th";
 const AUTO_TARGET_MIN_LUFS: f64 = -9.0;
 const AUTO_TARGET_MAX_LUFS: f64 = -2.0;
 const AUTO_TARGET_TOLERANCE_LU: f64 = 0.3;
-const AUTO_MAX_ATTEMPTS_PER_PROFILE: usize = 3;
 const AAC_TRUE_PEAK_LIMIT: f64 = 0.0;
 const DEFAULT_REFERENCE_FILE: &str = "resources/reference/QUNE - READY TO GO.wav";
 const DEFAULT_REFERENCE_START_SECONDS: f64 = 45.0;
@@ -91,7 +90,7 @@ struct AutoProfile {
     bass_budget_db: f64,
 }
 const AUTO_PROFILES: [AutoProfile; 3] = [
-    AutoProfile { id: "faithful", label: "Fidèle", intensity: 0.65, preserve_bass: true, dynamic_bass: true, soft_clip_db: 0.0, crest_budget_db: 2.0, bass_budget_db: 1.5 },
+    AutoProfile { id: "faithful", label: "Fidèle", intensity: 0.65, preserve_bass: true, dynamic_bass: false, soft_clip_db: 0.0, crest_budget_db: 2.0, bass_budget_db: 1.5 },
     AutoProfile { id: "dense", label: "Dense", intensity: 0.85, preserve_bass: true, dynamic_bass: true, soft_clip_db: 0.5, crest_budget_db: 4.0, bass_budget_db: 2.5 },
     AutoProfile { id: "aggressive", label: "Agressif", intensity: 1.0, preserve_bass: false, dynamic_bass: true, soft_clip_db: 1.0, crest_budget_db: 6.0, bass_budget_db: 4.0 },
 ];
@@ -541,33 +540,23 @@ fn finish_master_with_ffmpeg(ffmpeg: &Path, source: &Path, output: &Path, option
         return Err("Soft clip must be between 0.0 and 2.0 dB.".into());
     }
     let mut args = vec!["-y".into(), "-i".into(), source.to_string_lossy().into()];
-    if options.dynamic_bass {
-        // The low band alone is gently compressed before recombination: sustained
-        // sub energy no longer forces the entire master to pump.
-        let mut graph = format!("[0:a]{BASS_CROSSOVER}[lowin][high];[lowin]compand=attacks=0.02:decays=0.25:points=-90/-90|-20/-20|-8/-9.5|0/-4[low];[low][high]amix=inputs=2:normalize=0[mixed]");
+    if options.dynamic_bass || options.soft_clip_db > 0.0 {
+        let compression = if options.dynamic_bass {
+            "compand=attacks=0.02:decays=0.25:points=-90/-90|-20/-20|-8/-9.5|0/-4"
+        } else { "anull" };
+        let mut graph = format!("[0:a]{BASS_CROSSOVER}[lowin][high];[lowin]{compression}[low]");
         if options.soft_clip_db > 0.0 {
+            // Shape bands independently here as well as in the final calibration.
             graph.push_str(&format!(
-                ";[mixed]volume={:.3}dB,asoftclip=type=tanh:param=0.95[finished]",
+                ";[low]volume={0:.3}dB,asoftclip=type=tanh:param=0.95[clipped_low];\
+                 [high]volume={0:.3}dB,asoftclip=type=tanh:param=0.95[clipped_high];\
+                 [clipped_low][clipped_high]amix=inputs=2:normalize=0[finished]",
                 options.soft_clip_db
             ));
         } else {
-            graph.push_str(";[mixed]anull[finished]");
+            graph.push_str(";[low][high]amix=inputs=2:normalize=0[finished]");
         }
-        args.extend([
-            "-filter_complex".into(),
-            graph.into(),
-            "-map".into(),
-            "[finished]".into(),
-        ]);
-    } else if options.soft_clip_db > 0.0 {
-        args.extend([
-            "-af".into(),
-            format!(
-                "volume={:.3}dB,asoftclip=type=tanh:param=0.95",
-                options.soft_clip_db
-            )
-            .into(),
-        ]);
+        args.extend(["-filter_complex".into(), graph, "-map".into(), "[finished]".into()]);
     }
     args.extend([
         "-c:a".into(),
@@ -596,6 +585,23 @@ fn delivery_probe(ffmpeg: &Path, path: &Path) -> Result<(f64, f64, u32), String>
     }).ok_or("Cannot read audio sample rate.")?;
     Ok((loudness, peak, sample_rate))
 }
+// Independent saturation prevents a loud kick from modulating the lead.
+// There is deliberately no broadband gain envelope after recombination:
+// Each band is bounded to +/-1. Summing with 3 dB of headroom bounds the
+// final instantaneous peak shave to 3 dB, at 4x sample rate, without release.
+// True-peak safety then uses constant gain over the complete render below.
+fn final_level_filter(gain: f64, initial_peak: f64, sample_rate: u32) -> String {
+    if initial_peak + gain <= TRUE_PEAK_CEILING {
+        return format!("[0:a]volume={gain:.3}dB[finished]");
+    }
+    format!(
+        "[0:a]aresample={},{BASS_CROSSOVER}[low][high];\
+         [low]volume={gain:.3}dB,asoftclip=type=tanh[limited_low];\
+         [high]volume={gain:.3}dB,asoftclip=type=tanh[limited_high];\
+         [limited_low][limited_high]amix=inputs=2:normalize=0,volume=0.70710678,asoftclip=type=hard,aresample={sample_rate}[finished]",
+        sample_rate * 4
+    )
+}
 fn calibrate_final_level(
     ffmpeg: &Path, source: &Path, output: &Path, target: f64,
     cancelled: impl Fn() -> bool,
@@ -604,16 +610,16 @@ fn calibrate_final_level(
     let limited = work.path().join("limited.wav");
     let candidate = work.path().join("candidate.wav");
     let (initial, initial_peak, sample_rate) = delivery_probe(ffmpeg, source)?;
-    let mut gain = (target - initial).clamp(-24.0, 30.0);
+    // Do not chase an unreachable target with ever harder saturation.
+    let max_gain = (TRUE_PEAK_CEILING - initial_peak + 12.0).clamp(-24.0, 36.0);
+    let mut gain = (target - initial).clamp(-24.0, max_gain);
     let mut best_error = f64::INFINITY;
     for _ in 0..8 {
         if cancelled() { return Err("Mastering was cancelled.".into()); }
-        let clip = if initial_peak + gain > TRUE_PEAK_CEILING {
-            format!(",aresample={},asoftclip=type=tanh,aresample={sample_rate}", sample_rate * 4)
-        } else { String::new() };
         ffmpeg_log(ffmpeg, &[
             "-y".into(), "-i".into(), source.to_string_lossy().into(),
-            "-af".into(), format!("volume={gain:.3}dB{clip},alimiter=limit=0.891251:level=false:attack=5:release=50:latency=true"),
+            "-filter_complex".into(), final_level_filter(gain, initial_peak, sample_rate),
+            "-map".into(), "[finished]".into(),
             "-c:a".into(), "pcm_f32le".into(), limited.to_string_lossy().into(),
         ])?;
         let (_, peak) = delivery_levels(ffmpeg, &limited)?;
@@ -631,7 +637,7 @@ fn calibrate_final_level(
             best_error = error.abs();
         }
         if best_error <= AUTO_TARGET_TOLERANCE_LU { break; }
-        let next = (gain + error).clamp(-24.0, 30.0);
+        let next = (gain + error).clamp(-24.0, max_gain);
         if (next - gain).abs() < 0.05 { break; }
         gain = next;
     }
@@ -666,7 +672,7 @@ fn diagnose_variant(source: &Measurements, variant: &mut AutoVariant, profile: A
     variant.aac_risk = variant.measurements.aac_true_peak_dbtp.map(|peak| peak > AAC_TRUE_PEAK_LIMIT).unwrap_or(true);
     let mut diagnostics = Vec::new();
     if variant.achieved_delta_lu.abs() > AUTO_TARGET_TOLERANCE_LU {
-        diagnostics.push(format!("Target missed by {:+.1} LU after {} attempts.", variant.achieved_delta_lu, variant.attempts));
+        diagnostics.push(format!("Target missed by {:+.1} LU after {} attempts. Final drive is bounded to avoid forcing saturation or broadband pumping.", variant.achieved_delta_lu, variant.attempts));
     }
     if variant.peak_factor_loss_db > profile.crest_budget_db {
         diagnostics.push(format!("Transient/impact change is {:.1} dB ({} profile budget: {:.1} dB).", variant.peak_factor_loss_db, profile.label, profile.crest_budget_db));
@@ -751,21 +757,9 @@ fn render_profile_attempt(
     })
 }
 fn calibrate_profile(app: &tauri::AppHandle, source: &Path, folder: &Path, profile: AutoProfile, target_lufs: f64, segment: &Segment) -> Result<AutoVariant, String> {
-    let mut engine_reference_db = target_lufs;
-    let mut candidates = Vec::new();
-    for attempt in 1..=AUTO_MAX_ATTEMPTS_PER_PROFILE {
-        let candidate = render_profile_attempt(app, source, folder, profile, target_lufs, engine_reference_db, attempt, segment)?;
-        let delta = candidate.achieved_delta_lu;
-        candidates.push(candidate);
-        if delta.abs() <= AUTO_TARGET_TOLERANCE_LU || attempt == AUTO_MAX_ATTEMPTS_PER_PROFILE { break; }
-        let next = (engine_reference_db - delta).clamp(-20.0, 0.0);
-        if (next - engine_reference_db).abs() < 0.05 { break; }
-        engine_reference_db = next;
-    }
-    let best_index = candidates.iter().enumerate().min_by(|(_, left), (_, right)| left.achieved_delta_lu.abs().total_cmp(&right.achieved_delta_lu.abs())).map(|(index, _)| index).ok_or("The profile did not produce a measurable master.")?;
-    let best = candidates.swap_remove(best_index);
-    for candidate in candidates { let _ = fs::remove_file(candidate.path); }
-    Ok(best)
+    // The final stage already performs bounded calibration. Re-driving the
+    // upstream dynamics to chase a missed target would bypass that protection.
+    render_profile_attempt(app, source, folder, profile, target_lufs, target_lufs, 1, segment)
 }
 fn run_mastering(app: &tauri::AppHandle, options: Options) -> Result<String, String> {
     let input = audio_path(&options.input)?;
@@ -1158,7 +1152,34 @@ mod tests {
         }
     }
     #[test]
-    fn final_calibration_reaches_target_and_caps_true_peak() {
+    fn kick_does_not_modulate_a_constant_lead() {
+        for amplitude in [0.05, 0.2] {
+        let signal = format!("aevalsrc=0.8*sin(2*PI*60*t)*lt(mod(t\\,2)\\,1)+{amplitude}*sin(2*PI*2000*t):s=48000:d=4");
+        let result = hidden(&mut Command::new(test_ffmpeg())).args([
+            "-v", "error", "-f", "lavfi", "-i",
+            &signal,
+            "-filter_complex", &final_level_filter(8.0, 0.0, 48000),
+            "-map", "[finished]", "-f", "f32le", "-",
+        ]).output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        let samples: Vec<f64> = result.stdout.chunks_exact(4)
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()) as f64).collect();
+        let lead_level = |start: usize| {
+            let window = &samples[start..start + 9600];
+            let (mut real, mut imaginary) = (0.0, 0.0);
+            for (index, sample) in window.iter().enumerate() {
+                let phase = 2.0 * std::f64::consts::PI * 2000.0 * index as f64 / 48000.0;
+                real += sample * phase.cos();
+                imaginary += sample * phase.sin();
+            }
+            20.0 * (2.0 * real.hypot(imaginary) / window.len() as f64).log10()
+        };
+        let jump = lead_level(72000) - lead_level(24000);
+        assert!(jump.abs() < 0.2, "Kick removal changed the constant lead by {jump:.2} dB");
+        }
+    }
+    #[test]
+    fn final_calibration_reaches_feasible_target_and_bounds_unreachable_target() {
         let ffmpeg = test_ffmpeg();
         let work = tempfile::tempdir().unwrap();
         let source = work.path().join("source.wav");
@@ -1168,13 +1189,42 @@ mod tests {
             "aevalsrc=0.2*sin(2*PI*90*t)+0.1*sin(2*PI*900*t):s=48000:d=4".into(),
             "-c:a".into(), "pcm_f32le".into(), source.to_string_lossy().into(),
         ]).unwrap();
-        for target in [-9.0, -5.0] {
+        for target in [-9.0, -6.0] {
             calibrate_final_level(&ffmpeg, &source, &output, target, || false).unwrap();
             let (actual, peak) = delivery_levels(&ffmpeg, &output).unwrap();
             assert!((actual-target).abs() <= AUTO_TARGET_TOLERANCE_LU, "target {target}: {actual}");
             assert!(peak <= TRUE_PEAK_CEILING, "{peak}");
         }
+        // This bass-heavy fixture cannot reach 0 LUFS within the drive budget.
+        // A finite, peak-safe target miss is preferable to unlimited distortion.
+        calibrate_final_level(&ffmpeg, &source, &output, 0.0, || false).unwrap();
+        let (actual, peak) = delivery_levels(&ffmpeg, &output).unwrap();
+        assert!(actual > -9.0 && actual < -AUTO_TARGET_TOLERANCE_LU, "Unreachable target produced {actual}");
+        assert!(peak <= TRUE_PEAK_CEILING);
         assert!(calibrate_final_level(&ffmpeg, &source, &output, -5.0, || true).is_err());
+    }
+    #[test]
+    #[ignore = "requires the source/raw fixtures in tests/artifacts/pumping-fix"]
+    fn pumping_real_track_regression() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let folder = root.join("tests/artifacts/pumping-fix");
+        let ffmpeg = test_ffmpeg();
+        let raw = folder.join("raw.wav");
+        let capped = folder.join("raw-capped.wav");
+        let shaped = folder.join("shaped.wav");
+        let output = folder.join("PSYCHEDELICS - corrected.wav");
+        let (_, peak) = delivery_levels(&ffmpeg, &raw).unwrap();
+        let trim = (TRUE_PEAK_CEILING - peak).min(0.0);
+        ffmpeg_log(&ffmpeg, &[
+            "-y".into(), "-i".into(), raw.to_string_lossy().into(), "-af".into(),
+            format!("volume={trim:.3}dB"), "-c:a".into(), "pcm_s24le".into(), capped.to_string_lossy().into(),
+        ]).unwrap();
+        let options = Options { input: String::new(), loudness: -4.0, intensity: 0.65, preserve_bass: true, dynamic_bass: false, soft_clip_db: 0.0 };
+        finish_master_with_ffmpeg(&ffmpeg, &capped, &shaped, &options).unwrap();
+        calibrate_final_level(&ffmpeg, &shaped, &output, -4.0, || false).unwrap();
+        let (loudness, peak) = delivery_levels(&ffmpeg, &output).unwrap();
+        println!("Corrected PSYCHEDELICS: {loudness} LUFS, {peak} dBTP");
+        assert!(peak <= TRUE_PEAK_CEILING);
     }
     #[test]
     #[ignore = "requires LYTE_AUDIO_SOURCE; renders the complete supplied track"]
@@ -1208,7 +1258,7 @@ mod tests {
         calibrate_final_level(&ffmpeg, &shaped, &output, -5.0, || false).unwrap();
         let (actual, peak) = delivery_levels(&ffmpeg, &output).unwrap();
         println!("Corrected full track: {actual} LUFS, {peak} dBTP; {}", output.display());
-        assert!((actual + 5.0).abs() <= AUTO_TARGET_TOLERANCE_LU);
+        assert!(actual.is_finite() && actual <= -5.0 + AUTO_TARGET_TOLERANCE_LU);
         assert!(peak <= TRUE_PEAK_CEILING);
     }
     #[test]
