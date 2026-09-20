@@ -6,147 +6,78 @@ const assets = fs.readdirSync('dist/assets')
 const js = fs.readFileSync(path.join('dist/assets', assets.find(x => x.endsWith('.js'))), 'utf8')
 const css = fs.readFileSync(path.join('dist/assets', assets.find(x => x.endsWith('.css'))), 'utf8')
 const mocks = fs.readFileSync('node_modules/@tauri-apps/api/mocks.js', 'utf8').replace(/export\s*\{[^}]*\};?/g, '')
-// Browser-only IPC fixtures. These tests do NOT exercise PhaseLimiter or claim a DSP result.
+const bands = [-6, -9, -12, -18]
+const measurement = (lufs = -5) => ({ integratedLufs:lufs, truePeakDbtp:-1, peakFactorDb:6, bassRatioDb:-5, bandEnergyDb:bands, aacTruePeakDbtp:-.2 })
+const variant = (id, label, lufs, similarity) => ({ id, profileId:id, profileLabel:label, targetLufs:-5, engineReferenceDb:-5, achievedDeltaLu:lufs + 5, attempts:2, path:`C:\\Temp\\${id}.wav`, measurements:measurement(lufs), segmentMeasurements:measurement(lufs), preserveBass:id !== 'aggressive', peakFactorLossDb:id === 'aggressive' ? 4.2 : 1.2, bassChangeDb:id === 'aggressive' ? 1.5 : .2, aacRisk:id === 'aggressive', diagnostics:[`${label} diagnostic.`], referenceSimilarity:similarity })
+
 async function mount(page) {
-  await page.route('**/*', route => route.fulfill({ contentType: 'text/html', body: String.raw`<!doctype html><html lang="en"><head><meta charset="UTF-8"><style>${css}</style></head><body><div id="app"></div><script type="module">
+  await page.route('**/*', route => route.fulfill({ contentType:'text/html', body:String.raw`<!doctype html><html><head><style>${css}</style></head><body><div id="app"></div><script type="module">
 ${mocks}
-window.testCalls = [];
-window.completionDings = 0;
-window.AudioContext = class {
-  state = 'running'; currentTime = 0; destination = {};
-  createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
-  createOscillator() { return { frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, start() { window.completionDings += 1; }, stop() {} }; }
-  resume() { return Promise.resolve(); }
-  close() { return Promise.resolve(); }
-};
-mockWindows('main');
-mockIPC((cmd, args) => {
-  window.testCalls.push({ cmd, args });
-  if(cmd === 'plugin:dialog|open') return 'C:\\Audio\\track.wav';
-  if(cmd === 'inspect_track') return { path: args.path, name: 'track.wav', extension: 'WAV' };
-  if(cmd === 'start_mastering') return new Promise((resolve,reject) => {window.finishMaster = resolve; window.failMaster = reject;});
-  if(cmd === 'start_auto_mastering') return new Promise(resolve => {window.finishAuto = resolve;});
-  if(cmd === 'export_auto_master') return 'C:\\Audio\\hard-techno_-7dB_auto.wav';
-}, { shouldMockEvents: true });
-window.testEmit = (event,payload) => window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event,payload});
-${js}
-</script></body></html>` }));
+window.testCalls=[]; window.dialogCalls=0; window.completionDings=0;
+window.testMeasurement=(lufs=-5)=>({integratedLufs:lufs,truePeakDbtp:-1,peakFactorDb:6,bassRatioDb:-5,bandEnergyDb:[-6,-9,-12,-18],aacTruePeakDbtp:-.2});
+window.testVariant=(id,label,lufs,similarity)=>({id,profileId:id,profileLabel:label,targetLufs:-5,engineReferenceDb:-5,achievedDeltaLu:lufs+5,attempts:2,path:'C:\\Temp\\'+id+'.wav',measurements:window.testMeasurement(lufs),segmentMeasurements:window.testMeasurement(lufs),preserveBass:id!=='aggressive',peakFactorLossDb:id==='aggressive'?4.2:1.2,bassChangeDb:id==='aggressive'?1.5:.2,aacRisk:id==='aggressive',diagnostics:[label+' diagnostic.'],referenceSimilarity:similarity});
+window.AudioContext=class { state='running'; currentTime=0; destination={}; createGain(){return {gain:{setValueAtTime(){},exponentialRampToValueAtTime(){}},connect(){}}}; createOscillator(){return {frequency:{setValueAtTime(){}},connect(){},start(){window.completionDings+=1},stop(){}}}; resume(){return Promise.resolve()}; close(){return Promise.resolve()} };
+mockWindows('main'); mockIPC((cmd,args)=>{ window.testCalls.push({cmd,args}); if(cmd==='plugin:dialog|open'){ window.dialogCalls++; return window.dialogCalls === 1 ? 'C:\\Audio\\track.wav' : 'C:\\Audio\\reference.wav'; } if(cmd==='inspect_track') return {path:args.path,name:args.path.includes('reference')?'reference.wav':'track.wav',extension:'WAV'}; if(cmd==='inspect_waveform') return {durationSeconds:180,peaks:Array.from({length:240},(_,i)=>.18+Math.abs(Math.sin(i*.31))*.82)}; if(cmd==='start_mastering') return new Promise((resolve,reject)=>{window.finishMaster=resolve;window.failMaster=reject}); if(cmd==='start_auto_mastering') return new Promise(resolve=>{window.finishAuto=resolve}); if(cmd==='export_auto_master') return 'C:\\Audio\\track_hard-techno_dense_target--5.0LUFS_auto.wav'; },{shouldMockEvents:true});
+window.testEmit=(event,payload)=>window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event,payload});
+${js}</script></body></html>` }))
   await page.goto('https://lyte.test')
-  await expect(page.getByRole('button', { name: /Drop a track/ })).toBeEnabled()
 }
 
-test('idle layout, defaults and compact window', async ({ page }) => {
+test('help describes measured Auto targets and local references', async ({ page }) => {
   await mount(page)
-  await expect(page.getByRole('button', { name: /Drop a track/ })).toBeEnabled()
-  await expect(page.getByRole('button', { name: 'Paramètres' })).toHaveCount(0)
-
-  await page.getByRole('button', { name: /Aide/ }).click()
-  await expect(page.getByRole('dialog', { name: 'Masterisez sans quitter votre ordinateur.' })).toBeVisible()
-  await expect(page.getByText('Projets audio à l’origine du moteur')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Bakuage' })).toHaveAttribute('href', 'https://github.com/ai-mastering/bakuage')
-  await page.getByRole('link', { name: 'Bakuage' }).click()
-  expect(await page.evaluate(() => window.testCalls.some(x => x.cmd === 'open_help_link' && x.args.project === 'bakuage'))).toBe(true)
-  await expect(page.getByText('Ce que fait le moteur')).toBeVisible()
-  await page.getByRole('dialog').evaluate(element => { element.scrollTop = element.scrollHeight })
-  await expect(page.locator('.help-close')).toBeVisible()
-  await page.getByRole('button', { name: 'Fermer l’aide' }).click()
-  await expect(page.getByRole('dialog', { name: 'Masterisez sans quitter votre ordinateur.' })).toHaveCount(0)
-  await expect(page.locator('#loudness')).toHaveCount(0)
-  await expect(page.locator('#intensity')).toHaveCount(0)
-  await expect(page.getByRole('switch')).toHaveCount(0)
-  await page.screenshot({path:'tests/artifacts/idle.png', fullPage:true})
-  await page.setViewportSize({width:380,height:760})
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.getByRole('button', { name:'Aide' }).click()
+  await expect(page.getByRole('dialog', { name:'Masterisez sur votre ordinateur.' })).toBeVisible()
+  await expect(page.getByText('Measured Hard Techno target')).toHaveCount(0)
+  await expect(page.getByText('Mesures Auto')).toBeVisible()
+  await page.getByRole('button', { name:/Fermer/ }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
 })
 
-test('selection, exact settings, real event wiring and readable failure', async ({ page }) => {
+test('Manual keeps the direct PhaseLimiter options', async ({ page }) => {
   await mount(page)
-  await page.getByRole('button', { name: /Drop a track/ }).click()
-  await expect(page.getByText('track.wav', {exact:true})).toBeVisible()
+  await page.getByRole('button', { name:/Drop a track/ }).click()
   await page.locator('#loudness').fill('-8.5')
-  await page.locator('#bass').check()
-  await page.getByRole('button', {name:'MASTER TRACK'}).click()
-  await expect(page.getByRole('progressbar')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'MASTER TRACK' })).toHaveCount(0)
-  await expect(page.locator('#loudness')).toHaveCount(0)
-  expect(await page.evaluate(() => window.testCalls.find(x=>x.cmd==='start_mastering').args.options)).toEqual({input:'C:\\Audio\\track.wav',loudness:-8.5,intensity:1,preserveBass:true,dynamicBass:true,softClipDb:0.5})
-  await page.evaluate(() => window.testEmit('mastering-progress',42))
-  await expect(page.getByRole('progressbar')).toHaveAttribute('value','38')
-  await page.screenshot({path:'tests/artifacts/processing.png', fullPage:true})
-  await page.evaluate(() => window.failMaster('PhaseLimiter was not found. Place phase_limiter.exe and its DLLs in /bin.'))
-  await expect(page.getByRole('alert')).toContainText('PhaseLimiter was not found')
-  await expect(page.getByRole('button', {name:'MASTER TRACK'})).toBeEnabled()
+  await page.getByRole('button', { name:'MASTER TRACK' }).click()
+  expect(await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_mastering').args.options)).toEqual({input:'C:\\Audio\\track.wav',loudness:-8.5,intensity:1,preserveBass:false,dynamicBass:true,softClipDb:.5})
+  await page.evaluate(() => window.finishMaster({output:'C:\\Audio\\master.wav',source:window.testMeasurement(-10),master:window.testMeasurement(-8)}))
+  await expect(page.getByText(/Master complete/)).toBeVisible()
 })
 
-test('native drop event, completion and constrained folder command', async ({ page }) => {
+test('Auto sends the explicit target and three profile result is exportable', async ({ page }) => {
   await mount(page)
-  await page.evaluate(() => window.testEmit('tauri://drag-drop',{paths:['C:\\Audio\\track.wav'],position:{x:100,y:100}}))
-  await expect(page.getByText('track.wav', {exact:true})).toBeVisible()
-  await page.getByRole('button', {name:'MASTER TRACK'}).click()
-  await page.evaluate(() => window.testEmit('mastering-progress',100))
+  await page.getByRole('button', { name:/Drop a track/ }).click()
+  await page.getByRole('button', { name:/Auto/ }).click()
+  await expect(page.locator('#auto-target')).toHaveValue('-5')
+  await expect(page.locator('#auto-target')).toHaveAttribute('max', '-2')
+  await page.getByRole('button', { name:/Use integrated Hard Techno level/ }).click()
+  await expect(page.locator('#auto-target')).toHaveValue('-2.9')
+  await page.locator('#auto-target').fill('-4.5')
+  await page.getByTestId('source-waveform').click({ position: { x: 300, y: 40 } })
+  await page.getByRole('button', { name:'RENDER 3 PROFILES' }).click()
+  const options = await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_auto_mastering').args.options)
+  expect(options).toMatchObject({input:'C:\\Audio\\track.wav',targetLufs:-4.5,sourceSegment:{durationSeconds:30},reference:null})
+  expect(options.sourceSegment.startSeconds).toBeGreaterThan(0)
+  await page.evaluate(() => window.testEmit('mastering-progress', 100))
   await expect(page.getByRole('progressbar')).toHaveAttribute('value','90')
-  await page.evaluate(() => window.finishMaster({output:'C:\\Audio\\track_mastered_-8.5dB_i1.00_bass-on.wav',source:{integratedLufs:-10,truePeakDbtp:-1,peakFactorDb:8,bassRatioDb:-4},master:{integratedLufs:-8,truePeakDbtp:-1,peakFactorDb:7,bassRatioDb:-5,aacTruePeakDbtp:-0.2}}))
-  await expect(page.getByText('✓ Master complete')).toBeVisible()
-  await expect.poll(() => page.evaluate(() => window.completionDings)).toBe(1)
-  await expect(page.locator('.manual-score')).toContainText('99/100')
-  await page.getByRole('button', {name:/Open folder/}).click()
-  expect(await page.evaluate(() => window.testCalls.some(x=>x.cmd==='open_output_folder'))).toBe(true)
-  await page.screenshot({path:'tests/artifacts/succeeded.png', fullPage:true})
-  await page.getByRole('button', { name: 'Start over' }).click()
-  await expect(page.getByRole('button', { name: /Drop a track/ })).toBeVisible()
-  await expect(page.getByText('Master complete')).toHaveCount(0)
+  await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:\\Temp\\source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-4.5,variants:[window.testVariant('faithful','Fidèle',-4.7),window.testVariant('dense','Dense',-4.5),window.testVariant('aggressive','Agressif',-4.4)],recommendedId:'dense',recommendation:'Dense is selected as the middle trade-off.'}))
+  await expect(page.getByText('Three profiles ready')).toBeVisible()
+  await expect(page.locator('.variant')).toHaveCount(3)
+  await expect(page.getByText('Dense diagnostic.')).toBeVisible()
+  await page.getByRole('button', { name:'Export selected master' }).click()
+  expect(await page.evaluate(() => window.testCalls.some(x => x.cmd === 'export_auto_master' && x.args.variantId === 'dense'))).toBe(true)
 })
 
-test('Auto Hard Techno selects a measured variant and exports only on choice', async ({ page }) => {
+test('Auto accepts an optional reference passage and shows its comparison', async ({ page }) => {
   await mount(page)
-  await page.getByRole('button', { name: /Drop a track/ }).click()
-  await expect(page.getByText('track.wav', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: /Auto — Hard Techno/ }).click()
-  await expect(page.getByText('Adaptive loudness search')).toBeVisible()
-  await page.getByRole('button', { name: 'ANALYSE & MASTER' }).click()
-  expect(await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_auto_mastering').args.options)).toEqual({ input: 'C:\\Audio\\track.wav' })
-  await expect(page.locator('#intensity')).toHaveCount(0)
-  await expect(page.getByRole('switch')).toHaveCount(0)
-  await page.evaluate(() => window.testEmit('mastering-progress',100))
-  await expect(page.getByRole('progressbar')).toHaveAttribute('value','11')
-  await page.evaluate(() => window.testEmit('mastering-progress',0))
-  await page.evaluate(() => window.testEmit('mastering-progress',100))
-  await expect(page.getByRole('progressbar')).toHaveAttribute('value','23')
-  await page.evaluate(() => window.testEmit('mastering-progress',0))
-  await page.evaluate(() => window.testEmit('mastering-progress',100))
-  await expect(page.getByRole('progressbar')).toHaveAttribute('value','34')
-  await page.evaluate(() => window.testEmit('mastering-progress',0))
-  await page.evaluate(() => window.testEmit('mastering-progress',100))
-  await expect(page.getByRole('progressbar')).toHaveAttribute('value','45')
-  await page.evaluate(() => window.finishAuto({
-    sessionId:'session-1', sourcePath:'C:\\Temp\\source.wav', source:{integratedLufs:-10,truePeakDbtp:-1,peakFactorDb:8,bassRatioDb:-4}, recommendedId:'v2', recommendation:'Recommended from measured loudness.',
-    variants:[
-      {id:'v0',targetDb:-11,path:'C:\\Temp\\v0.wav',measurements:{integratedLufs:-9,truePeakDbtp:-1,peakFactorDb:7,bassRatioDb:-4,aacTruePeakDbtp:-0.2},preserveBass:false,peakFactorLossDb:1,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
-      {id:'v1',targetDb:-9,path:'C:\\Temp\\v1.wav',measurements:{integratedLufs:-8,truePeakDbtp:-1,peakFactorDb:6,bassRatioDb:-4,aacTruePeakDbtp:-0.2},preserveBass:true,peakFactorLossDb:2,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
-      {id:'v2',targetDb:-7,path:'C:\\Temp\\v2.wav',measurements:{integratedLufs:-7.8,truePeakDbtp:-1,peakFactorDb:5.5,bassRatioDb:-4,aacTruePeakDbtp:-0.2},preserveBass:false,peakFactorLossDb:2.5,bassChangeDb:0,eligible:true,note:'Within guardrails.'},
-      {id:'v3',targetDb:-5,path:'C:\\Temp\\v3.wav',measurements:{integratedLufs:-7,truePeakDbtp:-1,peakFactorDb:3,bassRatioDb:-1,aacTruePeakDbtp:1.4},preserveBass:false,peakFactorLossDb:5,bassChangeDb:3,eligible:false,note:'Outside guardrails.'}
-    ]
-  }))
-  await expect(page.getByText('Auto results ready')).toBeVisible()
-  await expect.poll(() => page.evaluate(() => window.completionDings)).toBe(1)
-  await expect(page.getByRole('button', { name: /Drop a track/ })).toHaveCount(0)
-  await expect(page.locator('.mode-switch')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Start over' })).toBeVisible()
-  await expect(page.locator('.technical-balance')).toHaveCount(4)
-  await expect(page.getByText('Ranked results', { exact: true })).toBeVisible()
-  await expect(page.locator('.variant').first()).toContainText('#1')
-  await expect(page.locator('.variant').first()).toContainText('Best safe match')
-  await expect(page.locator('.technical-balance').first()).toContainText('Technical balance')
-  await expect(page.locator('.technical-balance').first()).toContainText('94/100')
-  await expect(page.locator('.variant').last()).toContainText('#4')
-  await expect(page.getByText('Recommended', { exact: true })).toBeVisible()
-  await expect(page.locator('.mastering-profile')).toHaveCount(4)
-  await expect(page.locator('.mastering-profile').first()).toContainText('Level')
-  await expect(page.locator('.mastering-profile').first()).toContainText('Codec')
-  await expect(page.locator('.mastering-profile').first()).toContainText('Safe')
-  await expect(page.locator('.variant small').filter({ hasText: 'Bass off' })).toHaveCount(3)
-  await expect(page.locator('.variant small').filter({ hasText: 'Bass on' })).toHaveCount(1)
-  await page.getByRole('button', { name: 'Export selected master' }).click()
-  expect(await page.evaluate(() => window.testCalls.some(x => x.cmd === 'export_auto_master'))).toBe(true)
-  await expect(page.getByRole('button', { name: '✓ Master exported' })).toBeDisabled()
+  await page.getByRole('button', { name:/Drop a track/ }).click()
+  await page.getByRole('button', { name:/Auto/ }).click()
+  await page.getByRole('button', { name:'Choose your own reference' }).click()
+  await expect(page.getByText('Your reference will replace the built-in Hard Techno reference.')).toBeVisible()
+  await page.getByTestId('reference-waveform').click({ position: { x: 120, y: 40 } })
+  await page.getByRole('button', { name:'RENDER 3 PROFILES' }).click()
+  const options = await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_auto_mastering').args.options)
+  expect(options.reference).toEqual({input:'C:\\Audio\\reference.wav',segment:{startSeconds:30,durationSeconds:30}})
+  await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:\\Temp\\source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-5,referencePath:'C:\\Temp\\reference.wav',referenceSegment:window.testMeasurement(-5),variants:[window.testVariant('faithful','Fidèle',-5,88),window.testVariant('dense','Dense',-5,91),window.testVariant('aggressive','Agressif',-5,82)],recommendedId:'dense',recommendation:'Dense is closest to the selected reference passage.'}))
+  await expect(page.getByText('Reference', { exact:true })).toBeVisible()
+  await expect(page.getByText('Ref 91/100')).toBeVisible()
 })

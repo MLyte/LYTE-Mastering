@@ -32,14 +32,14 @@ struct Options {
     soft_clip_db: f64,
 }
 const TRUE_PEAK_CEILING: f64 = -1.0;
-const AUTO_INTENSITY: f64 = 1.0;
-const AUTO_DYNAMIC_BASS: bool = true;
-const AUTO_SOFT_CLIP_DB: f64 = 0.5;
-const AUTO_MIN_TARGET: f64 = -12.0;
-const AUTO_MAX_TARGET: f64 = -4.0;
-const AUTO_MAX_SEARCH_RENDERS: usize = 7;
-const AUTO_MIN_LOUDNESS_GAIN: f64 = 0.3;
+const AUTO_TARGET_MIN_LUFS: f64 = -9.0;
+const AUTO_TARGET_MAX_LUFS: f64 = -2.0;
+const AUTO_TARGET_TOLERANCE_LU: f64 = 0.3;
+const AUTO_MAX_ATTEMPTS_PER_PROFILE: usize = 3;
 const AAC_TRUE_PEAK_LIMIT: f64 = 0.0;
+const DEFAULT_REFERENCE_FILE: &str = "resources/reference/QUNE - READY TO GO.wav";
+const DEFAULT_REFERENCE_START_SECONDS: f64 = 45.0;
+const DEFAULT_REFERENCE_DURATION_SECONDS: f64 = 30.0;
 static AUTO_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 struct AutoSession {
@@ -52,6 +52,21 @@ struct AutoSession {
 #[serde(rename_all = "camelCase")]
 struct AutoOptions {
     input: String,
+    target_lufs: f64,
+    source_segment: Segment,
+    reference: Option<ReferenceOptions>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Segment {
+    start_seconds: f64,
+    duration_seconds: f64,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReferenceOptions {
+    input: String,
+    segment: Segment,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,20 +75,44 @@ struct Measurements {
     true_peak_dbtp: f64,
     peak_factor_db: f64,
     bass_ratio_db: f64,
+    band_energy_db: [f64; 4],
     aac_true_peak_dbtp: Option<f64>,
 }
+#[derive(Clone, Copy)]
+struct AutoProfile {
+    id: &'static str,
+    label: &'static str,
+    intensity: f64,
+    preserve_bass: bool,
+    dynamic_bass: bool,
+    soft_clip_db: f64,
+    crest_budget_db: f64,
+    bass_budget_db: f64,
+}
+const AUTO_PROFILES: [AutoProfile; 3] = [
+    AutoProfile { id: "faithful", label: "Fidèle", intensity: 0.65, preserve_bass: true, dynamic_bass: true, soft_clip_db: 0.0, crest_budget_db: 2.0, bass_budget_db: 1.5 },
+    AutoProfile { id: "dense", label: "Dense", intensity: 0.85, preserve_bass: true, dynamic_bass: true, soft_clip_db: 0.5, crest_budget_db: 4.0, bass_budget_db: 2.5 },
+    AutoProfile { id: "aggressive", label: "Agressif", intensity: 1.0, preserve_bass: false, dynamic_bass: true, soft_clip_db: 1.0, crest_budget_db: 6.0, bass_budget_db: 4.0 },
+];
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AutoVariant {
     id: String,
-    target_db: f64,
+    profile_id: String,
+    profile_label: String,
+    target_lufs: f64,
+    engine_reference_db: f64,
+    achieved_delta_lu: f64,
+    attempts: usize,
     path: String,
     measurements: Measurements,
+    segment_measurements: Measurements,
     preserve_bass: bool,
     peak_factor_loss_db: f64,
     bass_change_db: f64,
-    eligible: bool,
-    note: String,
+    aac_risk: bool,
+    diagnostics: Vec<String>,
+    reference_similarity: Option<i32>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +120,12 @@ struct AutoResult {
     session_id: String,
     source_path: String,
     source: Measurements,
+    source_segment: Measurements,
+    target_lufs: f64,
+    reference_path: Option<String>,
+    reference_segment: Option<Measurements>,
+    reference_start_seconds: Option<f64>,
+    using_default_reference: bool,
     variants: Vec<AutoVariant>,
     recommended_id: String,
     recommendation: String,
@@ -98,6 +143,12 @@ struct Track {
     path: String,
     name: String,
     extension: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Waveform {
+    duration_seconds: f64,
+    peaks: Vec<f32>,
 }
 
 fn audio_path(path: &str) -> Result<PathBuf, String> {
@@ -126,6 +177,56 @@ fn inspect_track(path: String) -> Result<Track, String> {
         path,
     })
 }
+#[tauri::command]
+fn inspect_waveform(app: tauri::AppHandle, path: String) -> Result<Waveform, String> {
+    const SAMPLE_RATE: usize = 4_000;
+    const BINS: usize = 240;
+    let input = audio_path(&path)?;
+    let input_name = input.to_string_lossy().into_owned();
+    let ffmpeg = executable(&root(&app)?, "ffmpeg.exe", true)
+        .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
+    let output = hidden(&mut Command::new(ffmpeg))
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            input_name.as_str(),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "4000",
+            "-f",
+            "f32le",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|_| "FFmpeg could not prepare the waveform.".to_string())?;
+    if !output.status.success() {
+        return Err("FFmpeg could not prepare the waveform.".into());
+    }
+    let sample_count = output.stdout.len() / 4;
+    if sample_count == 0 {
+        return Err("The audio file contains no samples for the waveform.".into());
+    }
+    let duration_seconds = sample_count as f64 / SAMPLE_RATE as f64;
+    let mut peaks = vec![0.0_f32; BINS];
+    for (index, bytes) in output.stdout[..sample_count * 4].chunks_exact(4).enumerate() {
+        let sample = f32::from_le_bytes(bytes.try_into().unwrap()).abs();
+        let bin = index * BINS / sample_count;
+        peaks[bin] = peaks[bin].max(sample);
+    }
+    let ceiling = peaks.iter().copied().fold(0.0_f32, f32::max).max(0.0001);
+    for peak in &mut peaks {
+        *peak = (*peak / ceiling).powf(0.55);
+    }
+    Ok(Waveform {
+        duration_seconds,
+        peaks,
+    })
+}
 fn root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
         Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -138,6 +239,19 @@ fn root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             .map(|path| dunce::simplified(&path).to_path_buf())
             .map_err(|_| "Application resources cannot be located.".into())
     }
+}
+fn default_reference(app: &tauri::AppHandle) -> Result<(PathBuf, Segment), String> {
+    let path = root(app)?.join(DEFAULT_REFERENCE_FILE);
+    if !path.is_file() {
+        return Err("The built-in Hard Techno reference is unavailable. Reinstall LYTE Mastering.".into());
+    }
+    Ok((
+        path,
+        Segment {
+            start_seconds: DEFAULT_REFERENCE_START_SECONDS,
+            duration_seconds: DEFAULT_REFERENCE_DURATION_SECONDS,
+        },
+    ))
 }
 fn executable(root: &Path, name: &str, search_path: bool) -> Option<PathBuf> {
     let local = root.join("bin").join(name);
@@ -263,70 +377,66 @@ fn metric(log: &str, name: &str) -> Option<f64> {
             .ok()
     })
 }
-fn measure(app: &tauri::AppHandle, path: &Path) -> Result<Measurements, String> {
+fn validate_segment(segment: &Segment) -> Result<(), String> {
+    if !segment.start_seconds.is_finite() || segment.start_seconds < 0.0 {
+        return Err("The passage start must be a positive number of seconds.".into());
+    }
+    if !segment.duration_seconds.is_finite() || !(15.0..=60.0).contains(&segment.duration_seconds) {
+        return Err("Choose a passage between 15 and 60 seconds.".into());
+    }
+    Ok(())
+}
+fn measured_input_args(path: &Path, segment: Option<&Segment>) -> Vec<String> {
+    let mut args = vec!["-hide_banner".into()];
+    if let Some(segment) = segment {
+        args.extend(["-ss".into(), format!("{:.3}", segment.start_seconds), "-t".into(), format!("{:.3}", segment.duration_seconds)]);
+    }
+    args.extend(["-i".into(), path.to_string_lossy().into_owned()]);
+    args
+}
+fn measure_window(app: &tauri::AppHandle, path: &Path, segment: Option<&Segment>) -> Result<Measurements, String> {
+    if let Some(segment) = segment { validate_segment(segment)?; }
     let base = root(app)?;
     let ffmpeg = executable(&base, "ffmpeg.exe", true)
         .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
-    let file = path.to_string_lossy().into_owned();
+    let mut meter_args = measured_input_args(path, segment);
+    meter_args.extend(["-filter:a".into(), "ebur128=peak=true,astats=metadata=0:reset=0".into(), "-f".into(), "null".into(), "-".into()]);
     let log = ffmpeg_log(
         &ffmpeg,
-        &[
-            "-hide_banner".into(),
-            "-i".into(),
-            file.clone(),
-            "-filter:a".into(),
-            "ebur128=peak=true,astats=metadata=0:reset=0".into(),
-            "-f".into(),
-            "null".into(),
-            "-".into(),
-        ],
+        &meter_args,
     )?;
     if !(log.contains(" mono") || log.contains(" stereo")) {
         return Err("Auto Hard Techno supports mono or stereo files only.".into());
     }
     let integrated = metric(&log, "I:").ok_or("Could not measure integrated loudness.")?;
-    if !integrated.is_finite() || integrated <= -69.0 {
-        return Err("The audio appears silent. Choose a non-silent track.".into());
-    }
     let peak = metric(&log, "Peak:")
         .or_else(|| metric(&log, "Peak level dB:"))
         .ok_or("Could not measure true peak.")?;
     let rms = metric(&log, "RMS level dB:").unwrap_or(integrated);
-    let full = ffmpeg_log(
-        &ffmpeg,
-        &[
-            "-hide_banner".into(),
-            "-i".into(),
-            file.clone(),
-            "-af".into(),
-            "volumedetect".into(),
-            "-f".into(),
-            "null".into(),
-            "-".into(),
-        ],
-    )?;
-    let bass = ffmpeg_log(
-        &ffmpeg,
-        &[
-            "-hide_banner".into(),
-            "-i".into(),
-            file,
-            "-af".into(),
-            "highpass=f=30,lowpass=f=150,volumedetect".into(),
-            "-f".into(),
-            "null".into(),
-            "-".into(),
-        ],
-    )?;
-    let full_mean = metric(&full, "mean_volume:").unwrap_or(rms);
-    let bass_mean = metric(&bass, "mean_volume:").unwrap_or(rms);
+    let volume = |filter: &str| -> Result<f64, String> {
+        let mut args = measured_input_args(path, segment);
+        args.extend(["-af".into(), filter.into(), "-f".into(), "null".into(), "-".into()]);
+        let log = ffmpeg_log(&ffmpeg, &args)?;
+        Ok(metric(&log, "mean_volume:").unwrap_or(rms))
+    };
+    let full_mean = volume("volumedetect")?;
+    let bass_mean = volume("highpass=f=30,lowpass=f=150,volumedetect")?;
+    let bands = [(30, 150), (150, 500), (500, 4000), (4000, 16000)];
+    let mut band_energy_db = [0.0; 4];
+    for (index, (low, high)) in bands.iter().enumerate() {
+        band_energy_db[index] = volume(&format!("highpass=f={low},lowpass=f={high},volumedetect"))? - full_mean;
+    }
     Ok(Measurements {
         integrated_lufs: integrated,
         true_peak_dbtp: peak,
         peak_factor_db: peak - rms,
         bass_ratio_db: bass_mean - full_mean,
+        band_energy_db,
         aac_true_peak_dbtp: None,
     })
+}
+fn measure(app: &tauri::AppHandle, path: &Path) -> Result<Measurements, String> {
+    measure_window(app, path, None)
 }
 fn aac_true_peak(app: &tauri::AppHandle, path: &Path) -> Result<f64, String> {
     let ffmpeg = executable(&root(app)?, "ffmpeg.exe", true)
@@ -382,6 +492,32 @@ fn pcm24(app: &tauri::AppHandle, source: &Path, output: &Path, gain: f64) -> Res
             source.to_string_lossy().into(),
             "-af".into(),
             format!("volume={gain:.3}dB"),
+            "-c:a".into(),
+            "pcm_s24le".into(),
+            output.to_string_lossy().into(),
+        ],
+    )
+    .map(|_| ())
+}
+fn pcm24_segment(
+    app: &tauri::AppHandle,
+    source: &Path,
+    output: &Path,
+    segment: &Segment,
+) -> Result<(), String> {
+    validate_segment(segment)?;
+    let ffmpeg = executable(&root(app)?, "ffmpeg.exe", true)
+        .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
+    ffmpeg_log(
+        &ffmpeg,
+        &[
+            "-y".into(),
+            "-ss".into(),
+            format!("{:.3}", segment.start_seconds),
+            "-t".into(),
+            format!("{:.3}", segment.duration_seconds),
+            "-i".into(),
+            source.to_string_lossy().into(),
             "-c:a".into(),
             "pcm_s24le".into(),
             output.to_string_lossy().into(),
@@ -450,97 +586,47 @@ fn auto_session() -> Result<(String, PathBuf), String> {
         .map_err(|_| "Cannot create the temporary mastering session.".to_string())?;
     Ok((id, folder))
 }
-fn core_balance(measurements: &Measurements) -> f64 {
-    let loudness = 100.0 - ((measurements.integrated_lufs + 8.0).abs() * 12.0).min(100.0);
-    let peak = 100.0 - ((measurements.true_peak_dbtp + 1.0).abs() * 25.0).min(100.0);
-    let dynamics = 100.0 - ((measurements.peak_factor_db - 7.0).abs() * 20.0).min(100.0);
-    let bass = 100.0 - ((measurements.bass_ratio_db + 6.0).abs() * 15.0).min(100.0);
-    loudness * 0.45 + peak * 0.25 + dynamics * 0.20 + bass * 0.10
+fn reference_similarity(master: &Measurements, reference: &Measurements) -> i32 {
+    let mut distance = (master.peak_factor_db - reference.peak_factor_db).abs() * 7.0
+        + (master.bass_ratio_db - reference.bass_ratio_db).abs() * 7.0;
+    for index in 0..4 {
+        distance += (master.band_energy_db[index] - reference.band_energy_db[index]).abs() * 3.0;
+    }
+    (100.0 - distance).clamp(0.0, 100.0).round() as i32
 }
-
-fn technical_balance(measurements: &Measurements) -> i32 {
-    let codec_safety = measurements
-        .aac_true_peak_dbtp
-        .map(|peak| 100.0 - (peak.max(AAC_TRUE_PEAK_LIMIT) * 25.0).min(100.0))
-        .unwrap_or(100.0);
-    (core_balance(measurements) * 0.80 + codec_safety * 0.20).round() as i32
-}
-
-fn assess_auto_variant(source: &Measurements, variant: &mut AutoVariant) {
+fn diagnose_variant(source: &Measurements, variant: &mut AutoVariant, profile: AutoProfile, reference: Option<&Measurements>) {
     variant.peak_factor_loss_db = source.peak_factor_db - variant.measurements.peak_factor_db;
     variant.bass_change_db = variant.measurements.bass_ratio_db - source.bass_ratio_db;
-    let codec_safe = variant
-        .measurements
-        .aac_true_peak_dbtp
-        .map(|peak| peak <= AAC_TRUE_PEAK_LIMIT)
-        .unwrap_or(false);
-    variant.eligible =
-        variant.peak_factor_loss_db <= 3.0 && variant.bass_change_db.abs() <= 2.0 && codec_safe;
-    let mut issues = Vec::new();
-    if variant.peak_factor_loss_db > 3.0 {
-        issues.push("impact loss above 3 dB");
+    variant.aac_risk = variant.measurements.aac_true_peak_dbtp.map(|peak| peak > AAC_TRUE_PEAK_LIMIT).unwrap_or(true);
+    let mut diagnostics = Vec::new();
+    if variant.achieved_delta_lu.abs() > AUTO_TARGET_TOLERANCE_LU {
+        diagnostics.push(format!("Target missed by {:+.1} LU after {} attempts.", variant.achieved_delta_lu, variant.attempts));
     }
-    if variant.bass_change_db.abs() > 2.0 {
-        issues.push("low-end change above ±2 dB");
+    if variant.peak_factor_loss_db > profile.crest_budget_db {
+        diagnostics.push(format!("Transient/impact change is {:.1} dB ({} profile budget: {:.1} dB).", variant.peak_factor_loss_db, profile.label, profile.crest_budget_db));
     }
-    if !codec_safe {
-        issues.push("AAC true peak above 0 dBTP");
+    if variant.bass_change_db.abs() > profile.bass_budget_db {
+        diagnostics.push(format!("Sustained 30–150 Hz energy moved {:+.1} dB ({} profile budget: ±{:.1} dB).", variant.bass_change_db, profile.label, profile.bass_budget_db));
     }
-    variant.note = if issues.is_empty() {
-        "Within the impact, low-end and AAC codec-safety guardrails.".into()
-    } else {
-        format!("Outside guardrails: {}.", issues.join(", "))
-    };
+    if variant.aac_risk {
+        diagnostics.push("AAC simulation reaches above 0 dBTP; use caution for lossy delivery.".into());
+    }
+    if diagnostics.is_empty() {
+        diagnostics.push("Target, low-end movement and impact remain within this profile’s stated trade-offs.".into());
+    }
+    variant.reference_similarity = reference.map(|reference| reference_similarity(&variant.segment_measurements, reference));
+    variant.diagnostics = diagnostics;
 }
-
-fn auto_recommend(source: &Measurements, variants: &mut [AutoVariant]) -> (String, String) {
-    for variant in variants.iter_mut() {
-        assess_auto_variant(source, variant);
-    }
-    let eligible: Vec<&AutoVariant> = variants.iter().filter(|v| v.eligible).collect();
-    let pool = if eligible.is_empty() {
-        vec![variants
-            .iter()
-            .min_by(|a, b| a.target_db.partial_cmp(&b.target_db).unwrap())
-            .unwrap()]
-    } else {
-        eligible
-    };
-    let selected = pool
-        .into_iter()
-        .max_by_key(|variant| technical_balance(&variant.measurements))
-        .unwrap();
-    let score = technical_balance(&selected.measurements);
-    let source_core = core_balance(source).round() as i32;
-    let selected_core = core_balance(&selected.measurements).round() as i32;
-    let source_note = if selected_core <= source_core {
-        " The measured balance does not improve on the source; keeping the source or revisiting the mix is a valid choice."
-    } else {
-        ""
-    };
-    (
-        selected.id.clone(),
-        if selected.eligible {
-            format!(
-                "Highest technical-balance estimate ({score}/100) among versions that retain the impact, low-end and AAC codec-safety guardrails: {impact:.1} dB impact loss (max 3.0), {bass:+.1} dB bass change (max ±2.0), and AAC true peak at or below 0 dBTP.{source_note}",
-                impact = selected.peak_factor_loss_db,
-                bass = selected.bass_change_db,
-            )
-        } else {
-            format!("No version met every impact, low-end and AAC codec-safety guardrail. The least aggressive candidate is shown for comparison, but keeping the source or revisiting the mix is safer than treating it as an automatic improvement.{source_note}")
-        },
-    )
-}
-fn render_auto_variant(
+fn render_profile_attempt(
     app: &tauri::AppHandle,
     source: &Path,
     folder: &Path,
-    variants: &mut Vec<AutoVariant>,
-    target: f64,
-    preserve_bass: bool,
-    dynamic_bass: bool,
-    soft_clip_db: f64,
-) -> Result<(), String> {
+    profile: AutoProfile,
+    target_lufs: f64,
+    engine_reference_db: f64,
+    attempt: usize,
+    segment: &Segment,
+) -> Result<AutoVariant, String> {
     if app
         .state::<AppState>()
         .cancel_requested
@@ -548,31 +634,29 @@ fn render_auto_variant(
     {
         return Err("Mastering was cancelled.".into());
     }
-    let index = variants.len();
     let raw_path = PathBuf::from(run_mastering(
         app,
         Options {
             input: source.to_string_lossy().into(),
-            loudness: target,
-            intensity: AUTO_INTENSITY,
-            preserve_bass,
-            dynamic_bass,
-            soft_clip_db,
+            loudness: engine_reference_db,
+            intensity: profile.intensity,
+            preserve_bass: profile.preserve_bass,
+            dynamic_bass: false,
+            soft_clip_db: 0.0,
         },
     )?);
-    let bass = if preserve_bass { "on" } else { "off" };
-    let shaped_path = folder.join(format!("hard-techno_{target:.1}dB_bass-{bass}-shaped.wav"));
+    let shaped_path = folder.join(format!("{}-{attempt}-shaped.wav", profile.id));
     let options = Options {
         input: source.to_string_lossy().into(),
-        loudness: target,
-        intensity: AUTO_INTENSITY,
-        preserve_bass,
-        dynamic_bass,
-        soft_clip_db,
+        loudness: engine_reference_db,
+        intensity: profile.intensity,
+        preserve_bass: profile.preserve_bass,
+        dynamic_bass: profile.dynamic_bass,
+        soft_clip_db: profile.soft_clip_db,
     };
     finish_master(app, &raw_path, &shaped_path, &options)?;
     let shaped_measurements = measure(app, &shaped_path)?;
-    let final_path = folder.join(format!("hard-techno_{target:.1}dB_bass-{bass}.wav"));
+    let final_path = folder.join(format!("{}-{attempt}.wav", profile.id));
     pcm24(
         app,
         &shaped_path,
@@ -580,20 +664,44 @@ fn render_auto_variant(
         (TRUE_PEAK_CEILING - shaped_measurements.true_peak_dbtp).min(0.0),
     )?;
     let measurements = measure_export(app, &final_path)?;
+    let segment_measurements = measure_window(app, &final_path, Some(segment))?;
     let _ = fs::remove_file(raw_path);
     let _ = fs::remove_file(shaped_path);
-    variants.push(AutoVariant {
-        id: format!("v{index}"),
-        target_db: target,
+    Ok(AutoVariant {
+        id: profile.id.into(),
+        profile_id: profile.id.into(),
+        profile_label: profile.label.into(),
+        target_lufs,
+        engine_reference_db,
+        achieved_delta_lu: measurements.integrated_lufs - target_lufs,
+        attempts: attempt,
         path: final_path.to_string_lossy().into(),
         measurements,
-        preserve_bass,
+        segment_measurements,
+        preserve_bass: profile.preserve_bass,
         peak_factor_loss_db: 0.0,
         bass_change_db: 0.0,
-        eligible: false,
-        note: String::new(),
-    });
-    Ok(())
+        aac_risk: false,
+        diagnostics: Vec::new(),
+        reference_similarity: None,
+    })
+}
+fn calibrate_profile(app: &tauri::AppHandle, source: &Path, folder: &Path, profile: AutoProfile, target_lufs: f64, segment: &Segment) -> Result<AutoVariant, String> {
+    let mut engine_reference_db = target_lufs;
+    let mut candidates = Vec::new();
+    for attempt in 1..=AUTO_MAX_ATTEMPTS_PER_PROFILE {
+        let candidate = render_profile_attempt(app, source, folder, profile, target_lufs, engine_reference_db, attempt, segment)?;
+        let delta = candidate.achieved_delta_lu;
+        candidates.push(candidate);
+        if delta.abs() <= AUTO_TARGET_TOLERANCE_LU || attempt == AUTO_MAX_ATTEMPTS_PER_PROFILE { break; }
+        let next = (engine_reference_db - delta).clamp(-20.0, 0.0);
+        if (next - engine_reference_db).abs() < 0.05 { break; }
+        engine_reference_db = next;
+    }
+    let best_index = candidates.iter().enumerate().min_by(|(_, left), (_, right)| left.achieved_delta_lu.abs().total_cmp(&right.achieved_delta_lu.abs())).map(|(index, _)| index).ok_or("The profile did not produce a measurable master.")?;
+    let best = candidates.swap_remove(best_index);
+    for candidate in candidates { let _ = fs::remove_file(candidate.path); }
+    Ok(best)
 }
 fn run_mastering(app: &tauri::AppHandle, options: Options) -> Result<String, String> {
     let input = audio_path(&options.input)?;
@@ -728,6 +836,11 @@ async fn start_auto_mastering(
     app: tauri::AppHandle,
     options: AutoOptions,
 ) -> Result<AutoResult, String> {
+    if !options.target_lufs.is_finite() || !(AUTO_TARGET_MIN_LUFS..=AUTO_TARGET_MAX_LUFS).contains(&options.target_lufs) {
+        return Err("Choose an Auto target between −9 and −2 LUFS.".into());
+    }
+    validate_segment(&options.source_segment)?;
+    if let Some(reference) = &options.reference { validate_segment(&reference.segment)?; }
     if app.state::<AppState>().busy.swap(true, Ordering::SeqCst) {
         return Err("A track is already being mastered.".into());
     }
@@ -750,136 +863,35 @@ async fn start_auto_mastering(
         let source = folder.join("source.wav");
         pcm24(&worker, &input, &source, 0.0)?;
         let source_measurements = measure(&worker, &source)?;
+        let source_segment = measure_window(&worker, &source, Some(&options.source_segment))?;
+        let (reference_input, reference_selection, using_default_reference) = if let Some(reference) = options.reference {
+            (audio_path(&reference.input)?, reference.segment, false)
+        } else {
+            let (input, segment) = default_reference(&worker)?;
+            (input, segment, true)
+        };
+        let local_reference = folder.join("reference.wav");
+        pcm24_segment(&worker, &reference_input, &local_reference, &reference_selection)?;
+        let reference_measurements = measure(&worker, &local_reference)?;
         let mut variants = Vec::new();
-        let mut target = (((source_measurements.integrated_lufs + 3.0) * 2.0).round() / 2.0)
-            .clamp(-10.0, -7.0);
-        let mut last_accepted: Option<(f64, f64)> = None;
-        let mut failed_upper_target: Option<f64> = None;
-        let mut stop_reason = String::new();
-
-        while variants.len() < AUTO_MAX_SEARCH_RENDERS {
-            render_auto_variant(
-                &worker,
-                &source,
-                &folder,
-                &mut variants,
-                target,
-                false,
-                AUTO_DYNAMIC_BASS,
-                AUTO_SOFT_CLIP_DB,
-            )?;
-            let latest = variants
-                .last_mut()
-                .ok_or("The adaptive render could not be measured.")?;
-            assess_auto_variant(&source_measurements, latest);
-
-            if latest.eligible {
-                if let Some((previous_target, previous_lufs)) = last_accepted {
-                    let gain = latest.measurements.integrated_lufs - previous_lufs;
-                    if target > previous_target && gain < AUTO_MIN_LOUDNESS_GAIN {
-                        stop_reason = format!(
-                            "The search stopped at {target:.1} dB after the measured loudness gain fell below {AUTO_MIN_LOUDNESS_GAIN:.1} LU."
-                        );
-                        break;
-                    }
-                }
-                last_accepted = Some((target, latest.measurements.integrated_lufs));
-                if let Some(failed_target) = failed_upper_target {
-                    if variants.len() < AUTO_MAX_SEARCH_RENDERS && failed_target - target > 0.5 {
-                        let refined_target = target + (failed_target - target) / 2.0;
-                        render_auto_variant(
-                            &worker,
-                            &source,
-                            &folder,
-                            &mut variants,
-                            refined_target,
-                            false,
-                            AUTO_DYNAMIC_BASS,
-                            AUTO_SOFT_CLIP_DB,
-                        )?;
-                        if let Some(refined) = variants.last_mut() {
-                            assess_auto_variant(&source_measurements, refined);
-                        }
-                        stop_reason = format!(
-                            "The first trials crossed a guardrail; the search moved down to {target:.1} dB and refined the known boundary at {refined_target:.1} dB."
-                        );
-                    } else {
-                        stop_reason = format!(
-                            "The first trials crossed a guardrail; {target:.1} dB was the first acceptable target below that boundary."
-                        );
-                    }
-                    break;
-                }
-                if target >= AUTO_MAX_TARGET {
-                    stop_reason = format!(
-                        "The search reached the {AUTO_MAX_TARGET:.1} dB safety limit without crossing the impact or bass guardrails."
-                    );
-                    break;
-                }
-                target = (target + 1.0).min(AUTO_MAX_TARGET);
-            } else if let Some((accepted_target, _)) = last_accepted {
-                if variants.len() < AUTO_MAX_SEARCH_RENDERS && target - accepted_target > 0.5 {
-                    let refined_target = accepted_target + 0.5;
-                    render_auto_variant(
-                        &worker,
-                        &source,
-                        &folder,
-                        &mut variants,
-                        refined_target,
-                        false,
-                        AUTO_DYNAMIC_BASS,
-                        AUTO_SOFT_CLIP_DB,
-                    )?;
-                    if let Some(refined) = variants.last_mut() {
-                        assess_auto_variant(&source_measurements, refined);
-                    }
-                    stop_reason = format!(
-                        "The search crossed a guardrail at {target:.1} dB and refined the boundary at {refined_target:.1} dB."
-                    );
-                } else {
-                    stop_reason = format!(
-                        "The search stopped when {target:.1} dB crossed the impact or bass guardrails."
-                    );
-                }
-                break;
-            } else if target <= AUTO_MIN_TARGET {
-                stop_reason = format!(
-                    "The search reached {AUTO_MIN_TARGET:.1} dB without finding a version inside every initial guardrail."
-                );
-                break;
-            } else {
-                failed_upper_target = Some(target);
-                target = (target - 1.0).max(AUTO_MIN_TARGET);
-            }
+        for profile in AUTO_PROFILES {
+            let mut variant = calibrate_profile(&worker, &source, &folder, profile, options.target_lufs, &options.source_segment)?;
+            diagnose_variant(&source_measurements, &mut variant, profile, Some(&reference_measurements));
+            variants.push(variant);
         }
-
-        if stop_reason.is_empty() {
-            stop_reason = format!(
-                "The adaptive search used its limit of {AUTO_MAX_SEARCH_RENDERS} measured renders."
-            );
-        }
-        let search_render_count = variants.len();
-        let (first_recommended_id, _) = auto_recommend(&source_measurements, &mut variants);
-        let candidate_target = variants
+        let selected = variants
             .iter()
-            .find(|variant| variant.id == first_recommended_id)
-            .map(|variant| variant.target_db)
-            .ok_or("The automatic recommendation could not be resolved.")?;
-        render_auto_variant(
-            &worker,
-            &source,
-            &folder,
-            &mut variants,
-            candidate_target,
-            true,
-            AUTO_DYNAMIC_BASS,
-            AUTO_SOFT_CLIP_DB,
-        )?;
-        let (recommended_id, base_recommendation) =
-            auto_recommend(&source_measurements, &mut variants);
-        let recommendation = format!(
-            "{base_recommendation} {stop_reason} {search_render_count} bass-off candidates were measured, followed by a bass-on verification of the best candidate."
-        );
+            .max_by(|left, right| {
+                left.reference_similarity
+                    .unwrap_or(0)
+                    .cmp(&right.reference_similarity.unwrap_or(0))
+                    .then_with(|| right.achieved_delta_lu.abs().total_cmp(&left.achieved_delta_lu.abs()))
+            })
+            .ok_or("The Auto profiles did not produce a master.")?;
+        let recommended_id = selected.id.clone();
+        let similarity = selected.reference_similarity.unwrap_or(0);
+        let reference_kind = if using_default_reference { "built-in" } else { "selected" };
+        let recommendation = format!("{} is closest to the {reference_kind} reference passage ({similarity}/100 measured similarity) while landing at {:+.1} LU from the requested target.", selected.profile_label, selected.achieved_delta_lu);
         *worker
             .state::<AppState>()
             .session
@@ -894,6 +906,12 @@ async fn start_auto_mastering(
             session_id,
             source_path: source.to_string_lossy().into(),
             source: source_measurements,
+            source_segment,
+            target_lufs: options.target_lufs,
+            reference_path: Some(local_reference.to_string_lossy().into()),
+            reference_segment: Some(reference_measurements),
+            reference_start_seconds: Some(reference_selection.start_seconds),
+            using_default_reference,
             variants,
             recommended_id,
             recommendation,
@@ -935,17 +953,17 @@ fn export_auto_master(
     if !source.is_file() {
         return Err("The selected master is no longer available.".into());
     }
-    let bass = if variant.preserve_bass { "on" } else { "off" };
+    let profile = &variant.profile_id;
     let mut number = 1;
     let mut destination = session.export_folder.join(format!(
-        "{}_hard-techno_{:.1}dB_bass-{bass}_auto.wav",
-        session.export_stem, variant.target_db
+        "{}_hard-techno_{}_target-{:.1}LUFS_auto.wav",
+        session.export_stem, profile, variant.target_lufs
     ));
     while destination.exists() {
         number += 1;
         destination = session.export_folder.join(format!(
-            "{}_hard-techno_{:.1}dB_bass-{bass}_auto_{number}.wav",
-            session.export_stem, variant.target_db
+            "{}_hard-techno_{}_target-{:.1}LUFS_auto_{number}.wav",
+            session.export_stem, profile, variant.target_lufs
         ));
     }
     fs::copy(source, &destination).map_err(|_| "Cannot export the selected master.".to_string())?;
@@ -1021,6 +1039,7 @@ fn main() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             inspect_track,
+            inspect_waveform,
             start_mastering,
             start_auto_mastering,
             cancel_mastering,
@@ -1065,37 +1084,63 @@ mod tests {
         );
     }
     #[test]
-    fn rejects_aac_overshoot_from_auto_candidates() {
+    fn diagnoses_aac_risk_without_rejecting_an_aggressive_profile() {
         let source = Measurements {
             integrated_lufs: -8.0,
             true_peak_dbtp: -1.0,
             peak_factor_db: 7.0,
             bass_ratio_db: -6.0,
+            band_energy_db: [-6.0, -9.0, -12.0, -18.0],
             aac_true_peak_dbtp: None,
         };
         let mut variant = AutoVariant {
             id: "test".into(),
-            target_db: -7.0,
+            profile_id: "aggressive".into(),
+            profile_label: "Agressif".into(),
+            target_lufs: -5.0,
+            engine_reference_db: -5.0,
+            achieved_delta_lu: 0.0,
+            attempts: 1,
             path: "test.wav".into(),
             measurements: Measurements {
                 integrated_lufs: -8.0,
                 true_peak_dbtp: -1.0,
                 peak_factor_db: 7.0,
                 bass_ratio_db: -6.0,
+                band_energy_db: [-6.0, -9.0, -12.0, -18.0],
                 aac_true_peak_dbtp: Some(1.4),
             },
+            segment_measurements: source.clone(),
             preserve_bass: false,
             peak_factor_loss_db: 0.0,
             bass_change_db: 0.0,
-            eligible: true,
-            note: String::new(),
+            aac_risk: false,
+            diagnostics: Vec::new(),
+            reference_similarity: None,
         };
+        diagnose_variant(&source, &mut variant, AUTO_PROFILES[2], None);
+        assert!(variant.aac_risk);
+        assert!(variant.diagnostics.iter().any(|note| note.contains("AAC simulation")));
+    }
 
-        assess_auto_variant(&source, &mut variant);
+    #[test]
+    fn reference_similarity_rewards_matching_passages() {
+        let reference = Measurements { integrated_lufs: -5.0, true_peak_dbtp: -1.0, peak_factor_db: 5.0, bass_ratio_db: -6.0, band_energy_db: [-6.0, -8.0, -12.0, -18.0], aac_true_peak_dbtp: None };
+        let close = reference_similarity(&reference, &reference);
+        let loudness_matched = reference_similarity(&Measurements { integrated_lufs: -2.9, ..reference.clone() }, &reference);
+        let far = reference_similarity(&Measurements { integrated_lufs: -8.0, true_peak_dbtp: -1.0, peak_factor_db: 9.0, bass_ratio_db: -1.0, band_energy_db: [-1.0, -2.0, -3.0, -4.0], aac_true_peak_dbtp: None }, &reference);
+        assert_eq!(close, 100);
+        assert_eq!(loudness_matched, 100);
+        assert!(far < close);
+    }
 
-        assert!(!variant.eligible);
-        assert!(variant.note.contains("AAC true peak above 0 dBTP"));
-        assert!(technical_balance(&variant.measurements) < 100);
+    #[test]
+    fn validates_auto_target_and_passage_bounds() {
+        assert!(validate_segment(&Segment { start_seconds: 0.0, duration_seconds: 30.0 }).is_ok());
+        assert!(validate_segment(&Segment { start_seconds: -1.0, duration_seconds: 30.0 }).is_err());
+        assert!(validate_segment(&Segment { start_seconds: 0.0, duration_seconds: 10.0 }).is_err());
+        assert!((AUTO_TARGET_MIN_LUFS..=AUTO_TARGET_MAX_LUFS).contains(&-5.0));
+        assert!((AUTO_TARGET_MIN_LUFS..=AUTO_TARGET_MAX_LUFS).contains(&-2.0));
     }
 
     #[test]

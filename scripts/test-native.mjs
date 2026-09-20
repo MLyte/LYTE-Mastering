@@ -44,6 +44,7 @@ try {
   });
   await page.evaluate(input => window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event: 'tauri://drag-drop', payload: { paths: [input], position: { x: 100, y: 100 } } }), fixture);
   await page.getByText('test track.' + format, { exact: true }).waitFor();
+  if (!await page.locator('#loudness').count()) await page.getByRole('button', { name: 'Manual' }).click();
   await page.locator('#loudness').fill('-8.5');
   await page.locator('#intensity').fill('1');
   await page.locator('#bass').check();
@@ -64,7 +65,26 @@ try {
   await page.getByText('test track.' + format, { exact: true }).waitFor();
   await page.getByRole('button', { name: 'MASTER TRACK' }).click();
   await page.getByRole('alert').filter({ hasText: 'already exists' }).waitFor();
-  const report = { app: appPath, input: fixture, output, seconds: (Date.now() - start) / 1000, progressCount: progress.length, progressMin: Math.min(...progress), progressMax: Math.max(...progress), bytes: fs.statSync(output).size, noOverwrite: true };
+  let auto = undefined;
+  if (process.env.LYTE_TEST_AUTO === '1') {
+    await page.getByRole('button', { name: 'Start over' }).click();
+    await page.evaluate(input => window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event: 'tauri://drag-drop', payload: { paths: [input], position: { x: 100, y: 100 } } }), fixture);
+    await page.getByText('test track.' + format, { exact: true }).waitFor();
+    await page.getByRole('button', { name: /Auto/ }).click();
+    await page.locator('#auto-target').fill('-5');
+    const autoStart = Date.now();
+    await page.getByRole('button', { name: 'RENDER 3 PROFILES' }).click();
+    await page.waitForFunction(() => document.body.innerText.includes('Three profiles ready') || document.querySelector('[role=alert]'), null, { timeout: 600000 });
+    const autoError = await page.getByRole('alert').allTextContents();
+    if (autoError.length) throw new Error(autoError.join('\n'));
+    const profiles = await page.locator('.variant').count();
+    if (profiles !== 3) throw new Error(`Expected three Auto profiles, received ${profiles}`);
+    await page.getByText('Hard Techno reference', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Export selected master' }).click();
+    await page.getByText(/Master exported/).waitFor();
+    auto = { profiles, seconds: (Date.now() - autoStart) / 1000, targetLufs: -5 };
+  }
+  const report = { app: appPath, input: fixture, output, seconds: (Date.now() - start) / 1000, progressCount: progress.length, progressMin: Math.min(...progress), progressMax: Math.max(...progress), bytes: fs.statSync(output).size, noOverwrite: true, auto };
   fs.writeFileSync(path.join(work, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
   // The test process is stopped below; production permissions stay unchanged.

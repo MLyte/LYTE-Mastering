@@ -6,4 +6,5 @@ if (!fs.existsSync(path.join(release, 'lyte-mastering.exe'))) throw new Error('B
 // NSIS takes its files directly from source. Keep the standalone .exe equally usable.
 fs.cpSync(path.join(root, 'bin'), path.join(release, 'bin'), { recursive: true });
 fs.cpSync(path.join(root, 'resources', 'phaselimiter'), path.join(release, 'resources', 'phaselimiter'), { recursive: true });
+fs.cpSync(path.join(root, 'resources', 'reference'), path.join(release, 'resources', 'reference'), { recursive: true });
 console.log('Standalone release runtime copied beside lyte-mastering.exe.');

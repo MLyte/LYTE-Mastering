@@ -9,101 +9,184 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 type Status = "Idle" | "Ready" | "Processing" | "Succeeded" | "Failed";
 type Track = { path: string; name: string; extension: string };
-type Measurements = { integratedLufs: number; truePeakDbtp: number; peakFactorDb: number; bassRatioDb: number; aacTruePeakDbtp?: number };
-type Variant = { id: string; targetDb: number; path: string; measurements: Measurements; preserveBass: boolean; peakFactorLossDb: number; bassChangeDb: number; eligible: boolean; note: string };
-type AutoResult = { sessionId: string; sourcePath: string; source: Measurements; variants: Variant[]; recommendedId: string; recommendation: string };
+type Segment = { startSeconds: number; durationSeconds: number };
+type Waveform = { durationSeconds: number; peaks: number[] };
+type Measurements = { integratedLufs: number; truePeakDbtp: number; peakFactorDb: number; bassRatioDb: number; bandEnergyDb: number[]; aacTruePeakDbtp?: number };
+type Variant = { id: string; profileId: string; profileLabel: string; targetLufs: number; engineReferenceDb: number; achievedDeltaLu: number; attempts: number; path: string; measurements: Measurements; segmentMeasurements: Measurements; preserveBass: boolean; peakFactorLossDb: number; bassChangeDb: number; aacRisk: boolean; diagnostics: string[]; referenceSimilarity?: number };
+type AutoResult = { sessionId: string; sourcePath: string; source: Measurements; sourceSegment: Measurements; targetLufs: number; referencePath?: string; referenceSegment?: Measurements; referenceStartSeconds?: number; usingDefaultReference?: boolean; variants: Variant[]; recommendedId: string; recommendation: string };
 type MasterResult = { output: string; source: Measurements; master: Measurements };
-const status = ref<Status>("Idle"); const track = ref<Track | null>(null); const progress = ref(0); const autoPass = ref(0); const lastEngineProgress = ref(0); const error = ref(""); const output = ref(""); const dragging = ref(false); const connected = ref(false); const loading = ref(false); const helpOpen = ref(false); const helpTrigger = ref<HTMLButtonElement | null>(null); const helpCloseButton = ref<HTMLButtonElement | null>(null); const mode = ref<"manual" | "auto">("manual"); const auto = ref<AutoResult | null>(null); const manual = ref<MasterResult | null>(null); const selected = ref(""); const exporting = ref(false); const exportedVariantId = ref(""); const previewPlayer = ref<HTMLAudioElement | null>(null);
+
+const status = ref<Status>("Idle");
+const track = ref<Track | null>(null);
+const reference = ref<Track | null>(null);
+const sourceWaveform = ref<Waveform | null>(null);
+const referenceWaveform = ref<Waveform | null>(null);
+const progress = ref(0);
+const error = ref("");
+const output = ref("");
+const dragging = ref(false);
+const connected = ref(false);
+const loading = ref(false);
+const helpOpen = ref(false);
+const helpTrigger = ref<HTMLButtonElement | null>(null);
+const helpCloseButton = ref<HTMLButtonElement | null>(null);
+const mode = ref<"manual" | "auto">("manual");
+const auto = ref<AutoResult | null>(null);
+const manual = ref<MasterResult | null>(null);
+const selected = ref("");
+const exporting = ref(false);
+const exportedVariantIds = ref<string[]>([]);
+const previewPlayer = ref<HTMLAudioElement | null>(null);
+const settings = reactive({ loudness: -9, intensity: 1, preserveBass: false, dynamicBass: true, softClipDb: 0.5 });
+const autoSettings = reactive({ targetLufs: -5, sourceStart: 0, sourceDuration: 30, referenceStart: 0, referenceDuration: 30 });
 const busy = computed(() => status.value === "Processing");
 const hasResult = computed(() => Boolean(auto.value || manual.value));
-const selectedIsExported = computed(() => Boolean(selected.value) && selected.value === exportedVariantId.value);
-const hasEligibleVariant = computed(() => auto.value?.variants.some(variant => variant.eligible) ?? false);
-// Eligible masters take precedence; the measured estimate orders each group.
-const rankedVariants = computed(() => auto.value?.variants
-  .map((variant, index) => ({ variant, index, score: technicalBalance(variant.measurements) }))
-  .sort((left, right) => Number(right.variant.eligible) - Number(left.variant.eligible) || right.score - left.score || left.index - right.index) ?? []);
-const stage = computed<"import" | "setup" | "processing" | "result">(() => {
-  if (!track.value) return "import";
-  if (busy.value) return "processing";
-  return hasResult.value ? "result" : "setup";
-});
-const settings = reactive({ loudness: -9, intensity: 1, preserveBass: false, dynamicBass: true, softClipDb: 0.5 });
-try { const saved = JSON.parse(localStorage.getItem("lyte-settings") || "null"); if (saved) { if (Number.isFinite(saved.loudness) && saved.loudness >= -20 && saved.loudness <= 0) settings.loudness = saved.loudness; if (Number.isFinite(saved.intensity) && saved.intensity >= 0 && saved.intensity <= 1) settings.intensity = saved.intensity; if (typeof saved.preserveBass === "boolean") settings.preserveBass = saved.preserveBass; if (typeof saved.dynamicBass === "boolean") settings.dynamicBass = saved.dynamicBass; if (Number.isFinite(saved.softClipDb) && saved.softClipDb >= 0 && saved.softClipDb <= 2) settings.softClipDb = saved.softClipDb; if (saved.mode === "auto" || saved.mode === "manual") mode.value = saved.mode; } } catch {}
-watch([settings, mode], () => { try { localStorage.setItem("lyte-settings", JSON.stringify({ ...settings, mode: mode.value })); } catch {} }, { deep: true });
+const stage = computed<"import" | "setup" | "processing" | "result">(() => !track.value ? "import" : busy.value ? "processing" : hasResult.value ? "result" : "setup");
+const sourceSegment = computed<Segment>(() => ({ startSeconds: autoSettings.sourceStart, durationSeconds: autoSettings.sourceDuration }));
+const referenceSegment = computed<Segment>(() => ({ startSeconds: autoSettings.referenceStart, durationSeconds: autoSettings.referenceDuration }));
+try {
+  const saved = JSON.parse(localStorage.getItem("lyte-settings") || "null");
+  if (saved) {
+    for (const key of ["loudness", "intensity", "softClipDb"] as const) if (Number.isFinite(saved[key])) settings[key] = saved[key];
+    for (const key of ["preserveBass", "dynamicBass"] as const) if (typeof saved[key] === "boolean") settings[key] = saved[key];
+    if (Number.isFinite(saved.targetLufs) && saved.targetLufs >= -9 && saved.targetLufs <= -2) autoSettings.targetLufs = saved.targetLufs;
+    if (saved.mode === "auto" || saved.mode === "manual") mode.value = saved.mode;
+  }
+} catch {}
+watch([settings, autoSettings, mode], () => { try { localStorage.setItem("lyte-settings", JSON.stringify({ ...settings, targetLufs: autoSettings.targetLufs, mode: mode.value })); } catch {} }, { deep: true });
+
 const cleanup: UnlistenFn[] = [];
 let completionSoundContext: AudioContext | undefined;
-function primeCompletionSound() {
-  const AudioContextConstructor = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextConstructor) return;
-  try {
-    completionSoundContext ??= new AudioContextConstructor();
-    // This runs directly from the Master button click. WebView then permits the
-    // later completion notification after the asynchronous rendering has ended.
-    if (completionSoundContext.state === "suspended") void completionSoundContext.resume().catch(() => {});
-  } catch { /* Audio notifications are optional when the device has no output. */ }
-}
-function completionSound() {
-  const AudioContextConstructor = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextConstructor) return;
-  try {
-    completionSoundContext ??= new AudioContextConstructor();
-    const context = completionSoundContext;
-    const play = () => { const now = context.currentTime; const gain = context.createGain(); const oscillator = context.createOscillator(); oscillator.type = "sine"; oscillator.frequency.setValueAtTime(880, now); gain.gain.setValueAtTime(.001, now); gain.gain.exponentialRampToValueAtTime(.7, now + .015); gain.gain.exponentialRampToValueAtTime(.001, now + .22); oscillator.connect(gain); gain.connect(context.destination); oscillator.start(now); oscillator.stop(now + .24); };
-    if (context.state === "suspended") void context.resume().then(play).catch(() => {}); else play();
-  } catch { /* Audio notifications are optional when the device has no output. */ }
-}
 function fail(reason: unknown) { error.value = String(reason); status.value = "Failed"; }
-function resetResults() { auto.value = null; manual.value = null; selected.value = ""; exportedVariantId.value = ""; exporting.value = false; previewPlayer.value?.pause(); }
-function restart() { if (busy.value || loading.value) return; track.value = null; status.value = "Idle"; error.value = ""; output.value = ""; progress.value = 0; resetResults(); }
-async function load(path: string) { if (busy.value || loading.value) return; loading.value = true; error.value = ""; output.value = ""; progress.value = 0; resetResults(); try { track.value = await invoke<Track>("inspect_track", { path }); status.value = "Ready"; } catch (e) { track.value = null; fail(e); } finally { loading.value = false; } }
+function resetResults() { auto.value = null; manual.value = null; selected.value = ""; exportedVariantIds.value = []; exporting.value = false; previewPlayer.value?.pause(); }
+function restart() { if (busy.value || loading.value) return; track.value = null; reference.value = null; sourceWaveform.value = null; referenceWaveform.value = null; status.value = "Idle"; error.value = ""; output.value = ""; progress.value = 0; resetResults(); }
+async function load(path: string) { if (busy.value || loading.value) return; loading.value = true; error.value = ""; output.value = ""; progress.value = 0; resetResults(); try { track.value = await invoke<Track>("inspect_track", { path }); sourceWaveform.value = await invoke<Waveform>("inspect_waveform", { path }); autoSettings.sourceStart = 0; status.value = "Ready"; } catch (e) { track.value = null; sourceWaveform.value = null; fail(e); } finally { loading.value = false; } }
 async function choose() { try { const path = await open({ multiple: false, directory: false, filters: [{ name: "Audio", extensions: ["wav", "flac", "mp3"] }] }); if (typeof path === "string") await load(path); } catch (e) { fail(e); } }
-async function master() { if (!track.value || busy.value || loading.value) return; primeCompletionSound(); status.value = "Processing"; progress.value = 0; autoPass.value = 0; lastEngineProgress.value = 0; error.value = ""; output.value = ""; resetResults(); try { if (mode.value === "auto") { auto.value = await invoke<AutoResult>("start_auto_mastering", { options: { input: track.value.path } }); selected.value = auto.value.recommendedId; } else { manual.value = await invoke<MasterResult>("start_mastering", { options: { input: track.value.path, ...settings } }); output.value = manual.value.output; } progress.value = 100; status.value = "Succeeded"; completionSound(); } catch (e) { fail(e); } }
+async function chooseReference() { try { const path = await open({ multiple: false, directory: false, filters: [{ name: "Reference audio", extensions: ["wav", "flac", "mp3"] }] }); if (typeof path === "string") { reference.value = await invoke<Track>("inspect_track", { path }); referenceWaveform.value = await invoke<Waveform>("inspect_waveform", { path }); autoSettings.referenceStart = 0; error.value = ""; } } catch (e) { reference.value = null; referenceWaveform.value = null; fail(e); } }
+function primeCompletionSound() { const Ctor = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext; if (!Ctor) return; try { completionSoundContext ??= new Ctor(); if (completionSoundContext.state === "suspended") void completionSoundContext.resume(); } catch {} }
+function completionSound() { const Ctor = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext; if (!Ctor) return; try { completionSoundContext ??= new Ctor(); const play = () => { const c = completionSoundContext!; const gain = c.createGain(); const oscillator = c.createOscillator(); const now = c.currentTime; oscillator.frequency.setValueAtTime(880, now); gain.gain.setValueAtTime(.001, now); gain.gain.exponentialRampToValueAtTime(.5, now + .015); gain.gain.exponentialRampToValueAtTime(.001, now + .2); oscillator.connect(gain); gain.connect(c.destination); oscillator.start(now); oscillator.stop(now + .22); }; if (completionSoundContext.state === "suspended") void completionSoundContext.resume().then(play); else play(); } catch {} }
+async function master() {
+  if (!track.value || busy.value || loading.value) return;
+  primeCompletionSound(); status.value = "Processing"; progress.value = 0; error.value = ""; output.value = ""; resetResults();
+  try {
+    if (mode.value === "auto") {
+      auto.value = await invoke<AutoResult>("start_auto_mastering", { options: { input: track.value.path, targetLufs: autoSettings.targetLufs, sourceSegment: sourceSegment.value, reference: reference.value ? { input: reference.value.path, segment: referenceSegment.value } : null } });
+      selected.value = auto.value.recommendedId;
+    } else {
+      manual.value = await invoke<MasterResult>("start_mastering", { options: { input: track.value.path, ...settings } }); output.value = manual.value.output;
+    }
+    progress.value = 100; status.value = "Succeeded"; completionSound();
+  } catch (e) { fail(e); }
+}
 async function cancel() { try { await invoke("cancel_mastering"); } catch (e) { fail(e); } }
-async function exportSelected() { if (!auto.value || !selected.value || exporting.value || selectedIsExported.value) return; exporting.value = true; error.value = ""; try { output.value = await invoke<string>("export_auto_master", { sessionId: auto.value.sessionId, variantId: selected.value }); exportedVariantId.value = selected.value; } catch (e) { fail(e); } finally { exporting.value = false; } }
+async function exportSelected() { if (!auto.value || !selected.value || exporting.value || exportedVariantIds.value.includes(selected.value)) return; exporting.value = true; error.value = ""; try { output.value = await invoke<string>("export_auto_master", { sessionId: auto.value.sessionId, variantId: selected.value }); exportedVariantIds.value = [...exportedVariantIds.value, selected.value]; } catch (e) { fail(e); } finally { exporting.value = false; } }
 async function openFolder() { try { await invoke("open_output_folder"); } catch (e) { fail(e); } }
 async function openHelpLink(project: "bakuage" | "phaselimiter") { try { await invoke("open_help_link", { project }); } catch (e) { fail(e); } }
-function openHelp() { helpOpen.value = true; }
+function preview(path: string, lufs: number, start = 0) { const player = previewPlayer.value; if (!player) return fail("Preview is not ready yet. Please try again."); const values = auto.value ? [auto.value.source.integratedLufs, ...auto.value.variants.map(v => v.measurements.integratedLufs), auto.value.referenceSegment?.integratedLufs].filter((value): value is number => Number.isFinite(value)) : [lufs]; player.pause(); player.src = convertFileSrc(path); player.volume = Math.pow(10, Math.min(0, Math.min(...values) - lufs) / 20); player.onloadedmetadata = () => { player.currentTime = Math.max(0, start); void player.play().catch(() => fail("Preview could not start. Run mastering again and retry.")); }; player.load(); }
+function stopPreview() { previewPlayer.value?.pause(); }
+function display(value: number | undefined) { return Number.isFinite(value) ? Number(value).toFixed(1) : "—"; }
+function formatTime(seconds: number) { const rounded = Math.max(0, Math.round(seconds)); return Math.floor(rounded / 60) + ":" + String(rounded % 60).padStart(2, "0"); }
+function waveformPath(waveform: Waveform | null) {
+  if (!waveform?.peaks.length) return "";
+  return waveform.peaks.map((peak, index) => {
+    const x = ((index + 0.5) / waveform.peaks.length) * 100;
+    const height = Math.max(4, Math.min(46, peak * 46));
+    return "M " + x.toFixed(2) + " " + (50 - height).toFixed(2) + " V " + (50 + height).toFixed(2);
+  }).join(" ");
+}
+function selectionStyle(waveform: Waveform | null, start: number, duration: number) {
+  if (!waveform?.durationSeconds) return { left: "0%", width: "0%" };
+  const safeDuration = Math.min(duration, waveform.durationSeconds);
+  const safeStart = Math.min(Math.max(0, start), Math.max(0, waveform.durationSeconds - safeDuration));
+  return { left: ((safeStart / waveform.durationSeconds) * 100) + "%", width: Math.min(100, (safeDuration / waveform.durationSeconds) * 100) + "%" };
+}
+const sourceWavePath = computed(() => waveformPath(sourceWaveform.value));
+const referenceWavePath = computed(() => waveformPath(referenceWaveform.value));
+const sourceSelectionStyle = computed(() => selectionStyle(sourceWaveform.value, autoSettings.sourceStart, autoSettings.sourceDuration));
+const referenceSelectionStyle = computed(() => selectionStyle(referenceWaveform.value, autoSettings.referenceStart, autoSettings.referenceDuration));
+function clampPassage(kind: "source" | "reference") {
+  const waveform = kind === "source" ? sourceWaveform.value : referenceWaveform.value;
+  if (!waveform) return;
+  const duration = kind === "source" ? autoSettings.sourceDuration : autoSettings.referenceDuration;
+  const maxStart = Math.max(0, waveform.durationSeconds - Math.min(duration, waveform.durationSeconds));
+  if (kind === "source") autoSettings.sourceStart = Math.min(Math.max(0, autoSettings.sourceStart), maxStart);
+  else autoSettings.referenceStart = Math.min(Math.max(0, autoSettings.referenceStart), maxStart);
+}
+function setPassage(kind: "source" | "reference", event: PointerEvent) {
+  const waveform = kind === "source" ? sourceWaveform.value : referenceWaveform.value;
+  if (!waveform) return;
+  const duration = kind === "source" ? autoSettings.sourceDuration : autoSettings.referenceDuration;
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const position = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+  const maxStart = Math.max(0, waveform.durationSeconds - Math.min(duration, waveform.durationSeconds));
+  const start = Math.min(maxStart, Math.max(0, position * waveform.durationSeconds - duration / 2));
+  if (kind === "source") autoSettings.sourceStart = Math.round(start * 10) / 10;
+  else autoSettings.referenceStart = Math.round(start * 10) / 10;
+}
+function nudgePassage(kind: "source" | "reference", seconds: number) {
+  if (kind === "source") autoSettings.sourceStart += seconds;
+  else autoSettings.referenceStart += seconds;
+  clampPassage(kind);
+}
 function closeHelp() { helpOpen.value = false; void nextTick(() => helpTrigger.value?.focus()); }
 function onHelpKeydown(event: KeyboardEvent) { if (event.key === "Escape") closeHelp(); }
-function preview(path: string, lufs: number) { const player = previewPlayer.value; if (!player) { error.value = "Preview is not ready yet. Please try again."; return; } error.value = ""; const values = auto.value ? [auto.value.source.integratedLufs, ...auto.value.variants.map(v => v.measurements.integratedLufs)] : [lufs]; const floor = Math.min(...values); player.pause(); player.currentTime = 0; player.src = convertFileSrc(path); player.volume = Math.pow(10, Math.min(0, floor - lufs) / 20); player.load(); void player.play().catch(previewFailed); }
-function previewFailed() { error.value = "Preview could not start. The generated audio is unavailable; run mastering again and retry."; }
-function stopPreview() { previewPlayer.value?.pause(); }
-function display(value: number) { return Number.isFinite(value) ? value.toFixed(1) : "—"; }
-function energyPercent(lufs: number) { return Math.round(Math.max(0, Math.min(100, ((lufs + 12) / 8) * 100))); }
-function impactPercent(peakFactorDb: number) { return Math.round(Math.max(0, Math.min(100, (peakFactorDb / 10) * 100))); }
-function coreBalance(measurements: Measurements) { const loudness = 100 - Math.min(100, Math.abs(measurements.integratedLufs + 8) * 12); const peak = 100 - Math.min(100, Math.abs(measurements.truePeakDbtp + 1) * 25); const dynamics = 100 - Math.min(100, Math.abs(measurements.peakFactorDb - 7) * 20); const bass = 100 - Math.min(100, Math.abs(measurements.bassRatioDb + 6) * 15); return loudness * .45 + peak * .25 + dynamics * .20 + bass * .10; }
-function codecSafetyPercent(measurements: Measurements) { return measurements.aacTruePeakDbtp === undefined ? 100 : Math.round(Math.max(0, 100 - Math.max(0, measurements.aacTruePeakDbtp) * 25)); }
-function lowEndPercent(measurements: Measurements) { return Math.round(Math.max(0, 100 - Math.abs(measurements.bassRatioDb + 6) * 15)); }
-function technicalBalance(measurements: Measurements) { return Math.round(coreBalance(measurements) * .80 + codecSafetyPercent(measurements) * .20); }
-function codecLabel(measurements: Measurements) { return measurements.aacTruePeakDbtp === undefined ? 'Not tested' : measurements.aacTruePeakDbtp <= 0 ? 'Safe' : 'Over 0 dBTP'; }let resizeObserver: ResizeObserver | undefined; let resizeScheduled = false;
+let resizeObserver: ResizeObserver | undefined; let resizeScheduled = false;
 function scheduleWindowFit() { if (resizeScheduled) return; resizeScheduled = true; requestAnimationFrame(() => { resizeScheduled = false; void fitWindowToContent(); }); }
-async function fitWindowToContent() { try { const appWindow = getCurrentWindow(); if (await appWindow.isMaximized()) return; const scale = await appWindow.scaleFactor(); const current = (await appWindow.innerSize()).toLogical(scale); const monitor = await currentMonitor(); const maxHeight = monitor ? monitor.workArea.size.toLogical(monitor.scaleFactor).height - 48 : Number.POSITIVE_INFINITY; const contentHeight = Math.ceil(document.querySelector("main")?.getBoundingClientRect().height ?? 0) + 16; const targetHeight = Math.min(Math.max(480, contentHeight), Math.max(480, maxHeight)); if (Math.abs(current.height - targetHeight) > 4) await appWindow.setSize(new LogicalSize(Math.max(720, current.width), targetHeight)); } catch { /* Browser tests do not expose native window sizing. */ } }
-onMounted(async () => { try { cleanup.push(await listen<number>("mastering-progress", e => { if (!busy.value) return; if (mode.value === "manual") { progress.value = Math.max(progress.value, Math.min(90, Math.round(e.payload * 0.9))); return; } if (e.payload + 5 < lastEngineProgress.value && autoPass.value < 7) autoPass.value += 1; lastEngineProgress.value = e.payload; const reported = Math.round((autoPass.value + Math.min(100, e.payload) / 100) * 11.25); progress.value = Math.max(progress.value, Math.min(90, reported)); })); cleanup.push(await getCurrentWebview().onDragDropEvent(e => { dragging.value = !busy.value && (e.payload.type === "over" || e.payload.type === "enter"); if (e.payload.type === "drop" && !busy.value && !loading.value) { dragging.value = false; if (e.payload.paths.length !== 1) fail("Please drop one audio file at a time."); else void load(e.payload.paths[0]); } })); connected.value = true; } catch { error.value = "Desktop connection unavailable. Launch LYTE using npm run dev."; } });
-watch(stage, async () => { await nextTick(); scheduleWindowFit(); requestAnimationFrame(() => scheduleWindowFit()); }, { flush: "post" });
-watch(helpOpen, async (isOpen) => { if (isOpen) { await nextTick(); helpCloseButton.value?.focus(); } });
-onMounted(() => { const main = document.querySelector("main"); resizeObserver = new ResizeObserver(scheduleWindowFit); if (main) resizeObserver.observe(main); scheduleWindowFit(); });
+async function fitWindowToContent() { try { const window = getCurrentWindow(); if (await window.isMaximized()) return; const scale = await window.scaleFactor(); const current = (await window.innerSize()).toLogical(scale); const monitor = await currentMonitor(); const max = monitor ? monitor.workArea.size.toLogical(monitor.scaleFactor).height - 48 : Infinity; const documentHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, Math.ceil(document.querySelector("main")?.scrollHeight ?? 0)); const height = Math.min(Math.max(680, documentHeight + 16), Math.max(680, max)); if (Math.abs(current.height - height) > 4) await window.setSize(new LogicalSize(Math.max(800, current.width), height)); } catch {} }
+onMounted(async () => { try { cleanup.push(await listen<number>("mastering-progress", e => { if (busy.value) progress.value = Math.max(progress.value, Math.min(90, Math.round(e.payload * .9))); })); cleanup.push(await getCurrentWebview().onDragDropEvent(e => { dragging.value = !busy.value && (e.payload.type === "over" || e.payload.type === "enter"); if (e.payload.type === "drop" && !busy.value && !loading.value) { dragging.value = false; if (e.payload.paths.length !== 1) fail("Please drop one audio file at a time."); else void load(e.payload.paths[0]); } })); connected.value = true; } catch { error.value = "Desktop connection unavailable. Launch LYTE using npm run dev."; } const main = document.querySelector("main"); resizeObserver = new ResizeObserver(scheduleWindowFit); if (main) resizeObserver.observe(main); scheduleWindowFit(); });
+watch(stage, async () => { await nextTick(); scheduleWindowFit(); }, { flush: "post" });
+watch([sourceWaveform, () => autoSettings.sourceDuration], () => clampPassage("source"));
+watch([referenceWaveform, () => autoSettings.referenceDuration], () => clampPassage("reference"));
+watch(helpOpen, async isOpen => { if (isOpen) { await nextTick(); helpCloseButton.value?.focus(); } });
 onUnmounted(() => { cleanup.forEach(fn => fn()); resizeObserver?.disconnect(); previewPlayer.value?.pause(); void completionSoundContext?.close(); });
 </script>
 
 <template>
   <main>
-    <audio ref="previewPlayer" preload="auto" @error="previewFailed" @ended="stopPreview"></audio>
+    <audio ref="previewPlayer" preload="auto" @ended="stopPreview" />
     <header><div class="brand"><span class="mark" aria-hidden="true">L</span><h1>LYTE <span>Mastering</span></h1></div><span class="local"><i></i> LOCAL AUDIO</span></header>
-    <div class="utility-links"><button ref="helpTrigger" class="help-link" type="button" :aria-expanded="helpOpen" aria-controls="help" @click="openHelp"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M9.8 9a2.3 2.3 0 1 1 3.9 1.7c-.9.8-1.7 1.2-1.7 2.5" /><path d="M12 16.8h.01" /></svg>Aide</button></div>
-    <Teleport v-if="helpOpen" to="body"><div class="help-backdrop" @click.self="closeHelp"><section id="help" class="help" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1" @keydown="onHelpKeydown">
-      <div class="help-heading"><div><p class="eyebrow">GUIDE RAPIDE</p><h2 id="help-title">Masterisez sans quitter votre ordinateur.</h2></div><button ref="helpCloseButton" class="help-close" type="button" aria-label="Fermer l’aide" @click="closeHelp">×</button></div>
-      <p>LYTE applique un mastering local à votre morceau avec PhaseLimiter. Votre fichier est analysé et traité sur votre ordinateur ; le master WAV est enregistré à côté de l’original. Aucun fichier, réglage ou résultat n’est envoyé à un service en ligne.</p>
-      <ol class="help-steps"><li><strong>Importez un fichier.</strong> Déposez un WAV, FLAC ou MP3 dans la zone centrale, ou choisissez-le.</li><li><strong>Choisissez le mode.</strong> En <em>Manual</em>, réglez la cible, l’intensité et la conservation des basses. En <em>Auto — Hard Techno</em>, LYTE monte progressivement le niveau, mesure chaque rendu et s’arrête à la meilleure zone sûre.</li><li><strong>Lancez puis écoutez.</strong> Cliquez sur le bouton de mastering, comparez les variantes en mode Auto, puis exportez celle qui vous convient.</li></ol>
-      <div class="help-tech"><strong>Ce que fait le moteur</strong><ul><li>Il prépare une copie de travail, puis mesure le niveau intégré (LUFS), le true peak (dBTP), l’écart crête/niveau moyen et une estimation du grave entre 30 et 150 Hz.</li><li>En <em>Manual</em>, il lance PhaseLimiter avec votre cible et votre intensité. Le traitement travaille hors de votre fichier d’origine et n’enregistre le WAV final qu’après vérification.</li><li>En <em>Auto</em>, il part d’une cible prudente calculée depuis le morceau, augmente le niveau par étapes, puis affine la limite lorsque les garde-fous sont franchis. Il vérifie ensuite la meilleure candidate avec conservation du grave. Les versions au-delà de −1 dBTP sont atténuées avant comparaison.</li><li>La recommandation écarte les rendus qui perdent plus de 3 dB de facteur de crête, déplacent le grave de plus de ±2 dB ou dépassent 0 dBTP après le test AAC. L’indicateur d’équilibre technique reste une heuristique de comparaison, pas une note de qualité ni un jugement artistique.</li><li>La préécoute aligne le volume vers le bas pour une comparaison plus juste ; elle ne modifie pas les fichiers. Seul <em>Export selected master</em> copie votre choix près du morceau, sans écraser un master existant.</li></ul></div>
-      <p class="help-note">Le mode Auto est une recommandation technique : validez toujours le résultat à l’écoute, notamment sur votre système de diffusion.</p>
-      <div class="help-tech"><strong>Projets audio à l’origine du moteur</strong><ul><li><a href="https://github.com/ai-mastering/bakuage" @click.prevent="openHelpLink('bakuage')">Bakuage</a> — projet audio de référence associé aux travaux de mastering automatisé.</li><li><a href="https://github.com/ai-mastering/phaselimiter" @click.prevent="openHelpLink('phaselimiter')">PhaseLimiter</a> — moteur de mastering local utilisé par LYTE.</li></ul><small>Ces liens s’ouvrent dans votre navigateur par défaut.</small></div>
-    </section></div></Teleport>
+    <div class="utility-links"><button ref="helpTrigger" class="help-link" type="button" :aria-expanded="helpOpen" aria-controls="help" @click="helpOpen = true">Aide</button></div>
+    <Teleport v-if="helpOpen" to="body"><div class="help-backdrop" @click.self="closeHelp"><section id="help" class="help" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1" @keydown="onHelpKeydown"><div class="help-heading"><div><p class="eyebrow">GUIDE RAPIDE</p><h2 id="help-title">Masterisez sur votre ordinateur.</h2></div><button ref="helpCloseButton" class="help-close" type="button" aria-label="Fermer l’aide" @click="closeHelp">×</button></div><p>LYTE traite vos fichiers localement avec PhaseLimiter. Aucun morceau ni réglage n’est envoyé en ligne.</p><ol class="help-steps"><li><strong>Manual</strong> conserve les réglages directs de PhaseLimiter.</li><li><strong>Auto — Hard Techno</strong> vise un LUFS mesuré, rend Fidèle, Dense et Agressif, puis affiche les compromis.</li><li>Une <strong>référence locale</strong> est optionnelle : elle compare deux passages sans copier son égalisation.</li></ol><div class="help-tech"><strong>Mesures Auto</strong><ul><li>LUFS, true peak, facteur de crête, grave 30–150 Hz et quatre bandes d’énergie.</li><li>Chaque profil peut recalibrer sa consigne jusqu’à trois fois pour s’approcher de la cible à ±0,3 LUFS.</li><li>La sortie reste plafonnée à −1 dBTP ; la simulation AAC est un avertissement de diffusion.</li></ul></div><div class="help-tech"><strong>Projets audio à l’origine du moteur</strong><ul><li><a href="https://github.com/ai-mastering/bakuage" @click.prevent="openHelpLink('bakuage')">Bakuage</a></li><li><a href="https://github.com/ai-mastering/phaselimiter" @click.prevent="openHelpLink('phaselimiter')">PhaseLimiter</a></li></ul></div></section></div></Teleport>
     <section v-if="stage === 'import'" class="intro"><p class="eyebrow">THE FINAL TOUCH</p><h2>Make your track ready.</h2><p>Local mastering. Powered by PhaseLimiter.</p></section>
-    <button v-if="stage === 'import'" class="drop" :class="{ dragging }" :disabled="loading || !connected" @click="choose"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5" /></svg><strong>Drop a track here</strong><span>or <u>choose a file</u></span><small>WAV · FLAC · MP3</small></button>
+    <button v-if="stage === 'import'" class="drop" :class="{ dragging }" :disabled="loading || !connected" @click="choose"><strong>Drop a track here</strong><span>or <u>choose a file</u></span><small>WAV · FLAC · MP3</small></button>
     <section v-else class="track-summary" aria-label="Selected track"><div><span>TRACK READY</span><strong class="filename">{{ track?.name }}</strong><small>{{ track?.extension }} · Ready to master</small></div><button class="text-button" :disabled="busy" @click="restart">Start over</button></section>
-    <template v-if="stage === 'setup'"><div class="mode-switch" role="group" aria-label="Mastering mode"><button :class="{ active: mode === 'manual' }" @click="mode = 'manual'">Manual</button><button :class="{ active: mode === 'auto' }" @click="mode = 'auto'">Auto — Hard Techno</button></div>
-    <fieldset><legend class="sr-only">Mastering settings</legend><template v-if="mode === 'manual'"><div class="control"><label for="loudness">Target loudness</label><output for="loudness">{{ settings.loudness.toFixed(1) }} <span>dB</span></output><input id="loudness" v-model.number="settings.loudness" type="range" min="-20" max="0" step="0.1" /><div class="scale"><span>−20 dB</span><span>0 dB</span></div></div><div class="control"><label for="intensity">Mastering intensity</label><output for="intensity">{{ settings.intensity.toFixed(2) }}</output><input id="intensity" v-model.number="settings.intensity" type="range" min="0" max="1" step="0.01" /><div class="scale"><span>Subtle</span><span>Full</span></div></div><label class="bass" for="bass"><span>Preserve bass<small>Keep more weight in the low end.</small></span><input id="bass" v-model="settings.preserveBass" type="checkbox" role="switch" /><span class="toggle" aria-hidden="true"></span></label><label class="bass" for="dynamic-bass"><span>Dynamic low end<small>Gently controls sustained bass below 150 Hz.</small></span><input id="dynamic-bass" v-model="settings.dynamicBass" type="checkbox" role="switch" /><span class="toggle" aria-hidden="true"></span></label><div class="control"><label for="soft-clip">Soft clip <small>optional final peak shaping</small></label><output for="soft-clip">{{ settings.softClipDb.toFixed(1) }} <span>dB</span></output><input id="soft-clip" v-model.number="settings.softClipDb" type="range" min="0" max="2" step="0.1" /><div class="scale"><span>Off</span><span>2.0 dB</span></div></div></template><div v-else class="auto-note"><strong>Adaptive loudness search</strong><span>LYTE starts cautiously, raises the target step by step, and refines the loudest useful zone before checking the best candidate with bass preservation.</span></div></fieldset>
-    <button class="primary" :disabled="loading || !connected" @click="master">{{ mode === 'auto' ? 'ANALYSE & MASTER' : 'MASTER TRACK' }}<span aria-hidden="true">↗</span></button></template>    <section class="result" aria-live="polite" :aria-busy="busy"><template v-if="busy"><div class="result-row"><strong>{{ mode === 'auto' ? 'Searching for the best Hard Techno level…' : 'Mastering…' }}</strong><span>{{ Math.floor(progress) }}%</span></div><progress :value="progress" max="100" aria-label="Mastering progress"></progress><p>{{ mode === 'auto' ? 'Raising the target while impact and low-end balance stay within the guardrails.' : 'Working on your track. This may take a few minutes.' }}</p><button class="secondary" @click="cancel">Cancel mastering</button></template><template v-else-if="auto"><div class="result-row"><strong class="success">✓ Auto results ready</strong><span>−1 dBTP ceiling</span></div><aside class="recommendation"><strong>Why I recommend this version</strong><p>{{ auto.recommendation }}</p></aside><div class="source-row"><span>Source</span><b>{{ display(auto.source.integratedLufs) }} LUFS</b><button @click="preview(auto.sourcePath, auto.source.integratedLufs)">Play</button></div><div class="ranking-heading"><strong>Ranked results</strong><span>Best measured balance first</span></div><div class="variants"><div v-for="({ variant, score }, rank) in rankedVariants" :key="variant.id" class="variant" :class="{ selected: selected === variant.id, winner: rank === 0, ineligible: !variant.eligible }"><input :id="`variant-${variant.id}`" v-model="selected" type="radio" name="variant" :value="variant.id" /><label :for="`variant-${variant.id}`"><div class="variant-title"><span class="rank" :aria-label="`Rank ${rank + 1} of ${rankedVariants.length}`">#{{ rank + 1 }}</span><strong>{{ variant.targetDb.toFixed(1) }} dB <em v-if="rank === 0">{{ hasEligibleVariant ? 'Best safe match' : 'Safest candidate' }}</em><em v-else-if="variant.id === auto.recommendedId">Recommended</em></strong><span class="score">{{ score }}/100</span></div><small>{{ variant.preserveBass ? 'Bass on' : 'Bass off' }} · {{ display(variant.measurements.integratedLufs) }} LUFS · {{ display(variant.measurements.truePeakDbtp) }} dBTP<span v-if="variant.measurements.aacTruePeakDbtp !== undefined"> · AAC {{ display(variant.measurements.aacTruePeakDbtp) }} dBTP</span></small><div class="mastering-profile" :aria-label="`Measured profile: level ${energyPercent(variant.measurements.integratedLufs)} percent, impact ${impactPercent(variant.measurements.peakFactorDb)} percent, low end ${lowEndPercent(variant.measurements)} percent and codec safety ${codecSafetyPercent(variant.measurements)} percent`"><span>Level <i><b :style="{ width: `${energyPercent(variant.measurements.integratedLufs)}%` }"></b></i></span><span>Impact <i><b :style="{ width: `${impactPercent(variant.measurements.peakFactorDb)}%` }"></b></i></span><span>Low end <i><b :style="{ width: `${lowEndPercent(variant.measurements)}%` }"></b></i></span><span>Codec <i><b :class="{ unsafe: codecSafetyPercent(variant.measurements) < 100 }" :style="{ width: `${codecSafetyPercent(variant.measurements)}%` }"></b></i><small>{{ codecLabel(variant.measurements) }}</small></span></div><div class="technical-balance" :aria-label="`Technical balance estimate: ${technicalBalance(variant.measurements)} out of 100`"><span>Technical balance <small>estimate</small></span><b>{{ technicalBalance(variant.measurements) }}<i>/100</i></b><em>Heuristic indicator, not a quality grade</em></div><small>{{ variant.note }}</small></label><button type="button" @click="preview(variant.path, variant.measurements.integratedLufs)">Play</button></div></div><p class="metric-note">Eligible versions first, then a heuristic balance of level, true peak, dynamics, low end and AAC codec safety. This is a comparison aid, not a measure of artistic or professional quality.</p><div class="actions"><button class="secondary" @click="stopPreview">Stop preview</button><button class="secondary export" :class="{ exported: selectedIsExported }" :disabled="!selected || exporting || selectedIsExported" @click="exportSelected">{{ exporting ? 'Exporting…' : selectedIsExported ? '✓ Master exported' : 'Export selected master' }}</button></div><template v-if="output"><p class="filename">{{ output.split(/[\\/]/).pop() }}</p><button class="secondary" @click="openFolder">Open folder ↗</button></template></template><template v-else-if="manual"><div class="result-row"><strong class="success">✓ Master complete</strong><span>WAV</span></div><div class="technical-balance manual-score"><span>Technical balance <small>estimate</small></span><b>{{ technicalBalance(manual.master) }}<i>/100</i></b><em>{{ codecLabel(manual.master) }} · heuristic indicator</em></div><p class="metric-note">Export: {{ display(manual.master.integratedLufs) }} LUFS · {{ display(manual.master.truePeakDbtp) }} dBTP<span v-if="manual.master.aacTruePeakDbtp !== undefined"> · AAC {{ display(manual.master.aacTruePeakDbtp) }} dBTP</span>. Measured after finishing and true-peak capping.</p><p class="filename">{{ output.split(/[\/]/).pop() }}</p><button class="secondary" @click="openFolder">Open folder ↗</button></template><p v-else-if="!error" class="hint">{{ track ? 'Your master will be saved beside the original.' : 'Choose a track to get started.' }}</p><p v-if="error" role="alert" class="error">{{ error }}</p></section>
+    <template v-if="stage === 'setup'">
+      <div class="mode-switch" role="group" aria-label="Mastering mode"><button :class="{ active: mode === 'manual' }" @click="mode = 'manual'">Manual</button><button :class="{ active: mode === 'auto' }" @click="mode = 'auto'">Auto — Hard Techno</button></div>
+      <fieldset><legend class="sr-only">Mastering settings</legend>
+        <template v-if="mode === 'manual'"><div class="control"><label for="loudness">PhaseLimiter reference</label><output>{{ settings.loudness.toFixed(1) }} <span>dB</span></output><input id="loudness" v-model.number="settings.loudness" type="range" min="-20" max="0" step="0.1" /><div class="scale"><span>−20 dB</span><span>0 dB</span></div></div><div class="control"><label for="intensity">Mastering intensity</label><output>{{ settings.intensity.toFixed(2) }}</output><input id="intensity" v-model.number="settings.intensity" type="range" min="0" max="1" step="0.01" /></div><label class="bass"><span>Preserve bass</span><input id="bass" v-model="settings.preserveBass" type="checkbox" role="switch" /><span class="toggle" aria-hidden="true"></span></label><label class="bass"><span>Dynamic low end</span><input id="dynamic-bass" v-model="settings.dynamicBass" type="checkbox" role="switch" /><span class="toggle" aria-hidden="true"></span></label><div class="control"><label for="soft-clip">Soft clip</label><output>{{ settings.softClipDb.toFixed(1) }} <span>dB</span></output><input id="soft-clip" v-model.number="settings.softClipDb" type="range" min="0" max="2" step="0.1" /></div></template>
+        <template v-else>
+          <div class="auto-note"><strong>Measured Hard Techno target</strong><span>Three profiles aim for the same output LUFS. A built-in Hard Techno reference ranks their dynamics and tonal balance.</span></div>
+          <div class="control"><label for="auto-target">Target loudness</label><output>{{ autoSettings.targetLufs.toFixed(1) }} <span>LUFS</span></output><input id="auto-target" v-model.number="autoSettings.targetLufs" type="range" min="-9" max="-2" step="0.1" /><div class="scale"><span>−9 LUFS</span><span>−2 LUFS</span></div><button class="reference-target" type="button" @click="autoSettings.targetLufs = -2.9">Use integrated Hard Techno level · −2.9 LUFS</button></div>
+          <section class="passage">
+            <div class="passage-heading"><strong>Your passage</strong><output>{{ formatTime(autoSettings.sourceStart) }} – {{ formatTime(autoSettings.sourceStart + autoSettings.sourceDuration) }}</output></div>
+            <small id="source-passage-help">Click the waveform to place the selected passage. Choose 15–60 seconds; use left and right arrows for fine adjustment.</small>
+            <button v-if="sourceWaveform" data-testid="source-waveform" class="waveform-picker" type="button" aria-label="Choose your passage on the waveform" aria-describedby="source-passage-help" @pointerdown="setPassage('source', $event)" @keydown.left.prevent="nudgePassage('source', -1)" @keydown.right.prevent="nudgePassage('source', 1)">
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path :d="sourceWavePath" /></svg>
+              <span class="waveform-selection" :style="sourceSelectionStyle"></span>
+            </button>
+            <p v-else class="waveform-loading">Preparing waveform…</p>
+            <label class="passage-duration">Duration <output>{{ autoSettings.sourceDuration }} s</output><input v-model.number="autoSettings.sourceDuration" type="range" min="15" max="60" step="1" /></label>
+          </section>
+          <section class="passage reference-setup">
+            <div><strong>Professional reference <em>optional</em></strong><small>{{ reference ? 'Your reference will replace the built-in Hard Techno reference.' : 'Built-in Hard Techno reference active.' }}</small></div>
+            <button class="text-button" type="button" @click="chooseReference">{{ reference ? 'Replace reference' : 'Choose your own reference' }}</button>
+            <template v-if="reference">
+              <div class="passage-heading"><strong>Reference passage</strong><output>{{ formatTime(autoSettings.referenceStart) }} – {{ formatTime(autoSettings.referenceStart + autoSettings.referenceDuration) }}</output></div>
+              <small id="reference-passage-help">Click the waveform to choose the comparison passage; use left and right arrows for fine adjustment.</small>
+              <button v-if="referenceWaveform" data-testid="reference-waveform" class="waveform-picker" type="button" aria-label="Choose the reference passage on the waveform" aria-describedby="reference-passage-help" @pointerdown="setPassage('reference', $event)" @keydown.left.prevent="nudgePassage('reference', -1)" @keydown.right.prevent="nudgePassage('reference', 1)">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path :d="referenceWavePath" /></svg>
+                <span class="waveform-selection" :style="referenceSelectionStyle"></span>
+              </button>
+              <p v-else class="waveform-loading">Preparing waveform…</p>
+              <label class="passage-duration">Reference duration <output>{{ autoSettings.referenceDuration }} s</output><input v-model.number="autoSettings.referenceDuration" type="range" min="15" max="60" step="1" /></label>
+              <button class="text-button remove-reference" type="button" @click="reference = null; referenceWaveform = null">Use built-in reference</button>
+            </template>
+          </section>
+        </template>
+      </fieldset>
+      <button class="primary" :disabled="loading || !connected" @click="master">{{ mode === 'auto' ? 'RENDER 3 PROFILES' : 'MASTER TRACK' }}<span aria-hidden="true">↗</span></button>
+    </template>
+    <section class="result" aria-live="polite" :aria-busy="busy"><template v-if="busy"><div class="result-row"><strong>{{ mode === 'auto' ? 'Calibrating three Hard Techno profiles…' : 'Mastering…' }}</strong><span>{{ Math.floor(progress) }}%</span></div><progress :value="progress" max="100" /><p>{{ mode === 'auto' ? 'Each profile may render up to three times to approach the requested LUFS.' : 'Working on your track. This may take a few minutes.' }}</p><button class="secondary" @click="cancel">Cancel mastering</button></template><template v-else-if="auto"><div class="result-row"><strong class="success">✓ Three profiles ready</strong><span>Target {{ display(auto.targetLufs) }} LUFS · −1 dBTP ceiling</span></div><aside class="recommendation"><strong>Recommendation</strong><p>{{ auto.recommendation }}</p></aside><div class="source-row"><span>Source</span><b>{{ display(auto.source.integratedLufs) }} LUFS</b><button @click="preview(auto.sourcePath, auto.source.integratedLufs, autoSettings.sourceStart)">Play passage</button></div><div v-if="auto.referencePath && auto.referenceSegment" class="source-row"><span>{{ auto.usingDefaultReference ? 'Hard Techno reference' : 'Reference' }}</span><b>{{ display(auto.referenceSegment.integratedLufs) }} LUFS</b><button @click="preview(auto.referencePath!, auto.referenceSegment!.integratedLufs, 0)">Play passage</button></div><div class="ranking-heading"><strong>Compare at matched volume</strong><span>All three remain exportable.</span></div><div class="variants"><div v-for="variant in auto.variants" :key="variant.id" class="variant" :class="{ selected: selected === variant.id, winner: variant.id === auto.recommendedId }"><input :id="`variant-${variant.id}`" v-model="selected" type="radio" name="variant" :value="variant.id" /><label :for="`variant-${variant.id}`"><div class="variant-title"><strong>{{ variant.profileLabel }} <em v-if="variant.id === auto.recommendedId">Recommended</em></strong><span v-if="variant.referenceSimilarity !== undefined" class="score">Ref {{ variant.referenceSimilarity }}/100</span></div><small>Target {{ display(variant.targetLufs) }} · achieved {{ display(variant.measurements.integratedLufs) }} LUFS · {{ variant.achievedDeltaLu >= 0 ? '+' : '' }}{{ display(variant.achievedDeltaLu) }} LU · {{ variant.attempts }} attempt{{ variant.attempts > 1 ? 's' : '' }}</small><div class="metric-grid"><span>True peak <b>{{ display(variant.measurements.truePeakDbtp) }} dBTP</b></span><span>Impact <b>{{ variant.peakFactorLossDb >= 0 ? '−' : '+' }}{{ display(Math.abs(variant.peakFactorLossDb)) }} dB</b></span><span>Low end <b>{{ variant.bassChangeDb >= 0 ? '+' : '' }}{{ display(variant.bassChangeDb) }} dB</b></span><span :class="{ unsafe: variant.aacRisk }">AAC <b>{{ display(variant.measurements.aacTruePeakDbtp) }} dBTP</b></span></div><ul class="diagnostics"><li v-for="note in variant.diagnostics" :key="note">{{ note }}</li></ul></label><button type="button" @click="preview(variant.path, variant.measurements.integratedLufs, autoSettings.sourceStart)">Play</button></div></div><p class="metric-note">The reference score compares the selected passages only. It is a measurement aid, never a quality grade or tonal copy.</p><div class="actions"><button class="secondary" @click="stopPreview">Stop preview</button><button class="secondary export" :disabled="!selected || exporting || exportedVariantIds.includes(selected)" @click="exportSelected">{{ exporting ? 'Exporting…' : exportedVariantIds.includes(selected) ? '✓ Master exported' : 'Export selected master' }}</button></div><template v-if="output"><p class="filename">{{ output.split(/[\\/]/).pop() }}</p><button class="secondary" @click="openFolder">Open folder ↗</button></template></template><template v-else-if="manual"><div class="result-row"><strong class="success">✓ Master complete</strong><span>WAV</span></div><p class="metric-note">Export: {{ display(manual.master.integratedLufs) }} LUFS · {{ display(manual.master.truePeakDbtp) }} dBTP<span v-if="manual.master.aacTruePeakDbtp !== undefined"> · AAC {{ display(manual.master.aacTruePeakDbtp) }} dBTP</span>.</p><p class="filename">{{ output.split(/[\\/]/).pop() }}</p><button class="secondary" @click="openFolder">Open folder ↗</button></template><p v-else-if="!error" class="hint">{{ track ? 'Your master will be saved beside the original.' : 'Choose a track to get started.' }}</p><p v-if="error" role="alert" class="error">{{ error }}</p></section>
     <footer><span>PHASELIMITER ENGINE</span><span>Always on your computer.</span></footer>
   </main>
 </template>

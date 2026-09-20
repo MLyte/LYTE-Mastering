@@ -14,11 +14,11 @@
   "app": {
     "windows": [
       {
-        "title": "LYTE Mastering v2026.9.20 · build 02:55",
-        "width": 720,
-        "height": 640,
-        "minWidth": 460,
-        "minHeight": 480
+        "title": "LYTE Mastering v2026.9.20 · build 18:55",
+        "width": 800,
+        "height": 900,
+        "minWidth": 640,
+        "minHeight": 680
       }
     ],
     "security": {
@@ -33,7 +33,8 @@
     ],
     "resources": {
       "../bin/": "bin/",
-      "../resources/phaselimiter/": "resources/phaselimiter/"
+      "../resources/phaselimiter/": "resources/phaselimiter/",
+      "../resources/reference/": "resources/reference/"
     },
     "windows": {
       "nsis": {
