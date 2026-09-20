@@ -1,6 +1,6 @@
 [package]
 name = "lyte-mastering"
-version = "2026.9.20"
+version = "0.3.0-beta.1"
 description = "Local PhaseLimiter mastering"
 edition = "2021"
 

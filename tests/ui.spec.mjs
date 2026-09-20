@@ -58,7 +58,11 @@ test('Auto sends the explicit target and three profile result is exportable', as
   expect(options).toMatchObject({input:'C:\\Audio\\track.wav',targetLufs:-4.5,sourceSegment:{durationSeconds:30},reference:null})
   expect(options.sourceSegment.startSeconds).toBeGreaterThan(0)
   await page.evaluate(() => window.testEmit('mastering-progress', 100))
-  await expect(page.getByRole('progressbar')).toHaveAttribute('value','90')
+  // Completing one engine pass must not imply that all Auto profiles are ready.
+  await expect(page.getByRole('progressbar')).toHaveAttribute('value','11')
+  await page.evaluate(() => window.testEmit('mastering-progress', 0))
+  await page.evaluate(() => window.testEmit('mastering-progress', 100))
+  await expect(page.getByRole('progressbar')).toHaveAttribute('value','22')
   await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:\\Temp\\source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-4.5,variants:[window.testVariant('faithful','Fidèle',-4.7),window.testVariant('dense','Dense',-4.5),window.testVariant('aggressive','Agressif',-4.4)],recommendedId:'dense',recommendation:'Dense is selected as the middle trade-off.'}))
   await expect(page.getByText('Three profiles ready')).toBeVisible()
   await expect(page.locator('.variant')).toHaveCount(3)
