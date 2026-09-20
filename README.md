@@ -116,7 +116,18 @@ git clone --depth 1 https://github.com/ai-mastering/bakuage_dataset1.git
 
 Ne pas remplacer ce fichier par un cache vide ou le cache texte ProMeter. Python/Conda servent ici à la préparation de l'environnement upstream ; l'appel natif `mastering5` du MVP n'utilise aucun serveur Python. La liste `.so` du README moteur concerne Linux et ne doit pas être copiée telle quelle pour Windows.
 
-## Build de l'application
+## Installation pour l’utilisateur final
+
+L’installateur Windows NSIS inclut LYTE, PhaseLimiter, son cache de données, FFmpeg et les DLL livrées avec le moteur : l’utilisateur ne choisit aucun emplacement de bibliothèque et n’installe ni Node.js, Rust, Python, Go, GTK, Conda ni FFmpeg. Après installation, il choisit seulement son fichier WAV, FLAC ou MP3 ; le master est enregistré à côté de ce fichier, ce qui exige les droits d’écriture sur son dossier.
+
+Deux composants Windows peuvent toutefois être absents sur une machine neuve :
+
+- **Microsoft Edge WebView2 Runtime** : requis par Tauri ; l’installateur peut l’obtenir si nécessaire, donc une connexion Internet peut être demandée lors de cette première installation.
+- **Microsoft Visual C++ Redistributable x64** : requis par les bibliothèques PhaseLimiter. Il est déjà présent sur beaucoup de postes Windows ; si LYTE ou le moteur ne démarre pas, l’utilisateur doit l’installer depuis Microsoft, puis relancer LYTE.
+
+Le package cible Windows x64. L’installation se fait pour l’utilisateur Windows courant ; elle n’exige pas d’invite de commandes ni de sélection manuelle de DLL.
+
+## Build de l’application
 
 ```powershell
 cd C:\www\FREEMASTER

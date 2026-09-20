@@ -29,7 +29,6 @@ struct Options {
     intensity: f64,
     preserve_bass: bool,
 }
-const AUTO_BASE_TARGETS: [f64; 3] = [-7.0, -5.0, -4.0];
 const TRUE_PEAK_CEILING: f64 = -1.0;
 const AUTO_INTENSITY: f64 = 1.0;
 static AUTO_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -44,6 +43,7 @@ struct AutoSession {
 #[serde(rename_all = "camelCase")]
 struct AutoOptions {
     input: String,
+    targets: Vec<f64>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +75,13 @@ struct AutoResult {
     variants: Vec<AutoVariant>,
     recommended_id: String,
     recommendation: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterResult {
+    output: String,
+    source: Measurements,
+    master: Measurements,
 }
 
 #[derive(Serialize)]
@@ -343,6 +350,14 @@ fn auto_session() -> Result<(String, PathBuf), String> {
         .map_err(|_| "Cannot create the temporary mastering session.".to_string())?;
     Ok((id, folder))
 }
+fn professionalism(measurements: &Measurements) -> i32 {
+    let loudness = 100.0 - ((measurements.integrated_lufs + 8.0).abs() * 12.0).min(100.0);
+    let peak = 100.0 - ((measurements.true_peak_dbtp + 1.0).abs() * 25.0).min(100.0);
+    let dynamics = 100.0 - ((measurements.peak_factor_db - 7.0).abs() * 20.0).min(100.0);
+    let bass = 100.0 - ((measurements.bass_ratio_db + 6.0).abs() * 15.0).min(100.0);
+    (loudness * 0.45 + peak * 0.25 + dynamics * 0.20 + bass * 0.10).round() as i32
+}
+
 fn auto_recommend(source: &Measurements, variants: &mut [AutoVariant]) -> (String, String) {
     for variant in variants.iter_mut() {
         variant.peak_factor_loss_db = source.peak_factor_db - variant.measurements.peak_factor_db;
@@ -364,21 +379,21 @@ fn auto_recommend(source: &Measurements, variants: &mut [AutoVariant]) -> (Strin
     } else {
         eligible
     };
-    let loudest = pool
-        .iter()
-        .map(|v| v.measurements.integrated_lufs)
-        .fold(f64::NEG_INFINITY, f64::max);
     let selected = pool
         .into_iter()
-        .filter(|v| loudest - v.measurements.integrated_lufs <= 0.3)
-        .min_by(|a, b| a.target_db.partial_cmp(&b.target_db).unwrap())
+        .max_by_key(|variant| professionalism(&variant.measurements))
         .unwrap();
+    let score = professionalism(&selected.measurements);
     (
         selected.id.clone(),
         if selected.eligible {
-            "Recommended from measured loudness while retaining the initial impact and bass guardrails.".into()
+            format!(
+                "Highest Professionality estimate ({score}/100) among versions that retain the initial impact and bass guardrails: {impact:.1} dB impact loss (max 3.0) and {bass:+.1} dB bass change (max ±2.0).",
+                impact = selected.peak_factor_loss_db,
+                bass = selected.bass_change_db,
+            )
         } else {
-            "Compromise to verify by ear: no variant met every initial guardrail.".into()
+            format!("No version met every initial guardrail. This is the least aggressive available option; its Professionality estimate is {score}/100. Preview it before exporting.")
         },
     )
 }
@@ -562,6 +577,8 @@ async fn start_auto_mastering(
         .store(false, Ordering::SeqCst);
     let worker = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<AutoResult, String> {
+        if options.targets.len() != 3 || options.targets.iter().any(|target| !target.is_finite() || !(-20.0..=0.0).contains(target)) { return Err("Choose exactly three LUFS targets between -20 and 0.".into()); }
+        for (index, target) in options.targets.iter().enumerate() { if options.targets.iter().skip(index + 1).any(|other| (target - other).abs() < 0.01) { return Err("Each LUFS target must be different.".into()); } }
         let input = audio_path(&options.input)?;
         let export_stem = input
             .file_stem()
@@ -577,7 +594,7 @@ async fn start_auto_mastering(
         pcm24(&worker, &input, &source, 0.0)?;
         let source_measurements = measure(&worker, &source)?;
         let mut variants = Vec::new();
-        for target in AUTO_BASE_TARGETS {
+        for target in options.targets {
             render_auto_variant(&worker, &source, &folder, &mut variants, target, false)?;
         }
         let (first_recommended_id, _) = auto_recommend(&source_measurements, &mut variants);
@@ -671,13 +688,22 @@ fn export_auto_master(
     Ok(destination.to_string_lossy().into())
 }
 #[tauri::command]
-async fn start_mastering(app: tauri::AppHandle, options: Options) -> Result<String, String> {
+async fn start_mastering(app: tauri::AppHandle, options: Options) -> Result<MasterResult, String> {
     if app.state::<AppState>().busy.swap(true, Ordering::SeqCst) {
         return Err("A track is already being mastered.".into());
     }
     let worker = app.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || run_mastering(&worker, options)).await;
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<MasterResult, String> {
+        let source = measure(&worker, &audio_path(&options.input)?)?;
+        let output = run_mastering(&worker, options)?;
+        let master = measure(&worker, Path::new(&output))?;
+        Ok(MasterResult {
+            output,
+            source,
+            master,
+        })
+    })
+    .await;
     app.state::<AppState>().busy.store(false, Ordering::SeqCst);
     result.map_err(|e| {
         eprintln!("Mastering worker: {e}");
@@ -705,6 +731,18 @@ fn open_output_folder(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|_| "The output folder could not be opened.".to_string())?;
     Ok(())
 }
+#[tauri::command]
+fn open_help_link(project: String) -> Result<(), String> {
+    // The WebView can only request the two upstream project pages shown in help.
+    let url = match project.as_str() {
+        "bakuage" => "https://github.com/ai-mastering/bakuage",
+        "phaselimiter" => "https://github.com/ai-mastering/phaselimiter",
+        _ => return Err("This help link is not available.".into()),
+    };
+    let explorer = PathBuf::from(std::env::var_os("WINDIR").ok_or("Windows Explorer is unavailable.")?).join("explorer.exe");
+    hidden(Command::new(explorer).arg(url)).spawn().map_err(|_| "The help link could not be opened in your default browser.".to_string())?;
+    Ok(())
+}
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -715,7 +753,8 @@ fn main() {
             start_auto_mastering,
             cancel_mastering,
             export_auto_master,
-            open_output_folder
+            open_output_folder,
+            open_help_link
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

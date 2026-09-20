@@ -1,6 +1,6 @@
 {
   "name": "lyte-mastering",
-  "version": "0.2.1",
+  "version": "2026.9.20",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,8 @@
     "check:runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-runtime.ps1",
     "test:ui": "npm run build && playwright test",
     "check:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-runtime.ps1 -RequireBundled",
-    "test:native": "node scripts/test-native.mjs"
+    "test:native": "node scripts/test-native.mjs",
+    "prebuild": "node scripts/stamp-build-time.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
