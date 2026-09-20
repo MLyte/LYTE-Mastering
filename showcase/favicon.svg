@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>LYTE Mastering</title>
+  <rect width="64" height="64" rx="15" fill="#101318" />
+  <rect x="5.5" y="5.5" width="53" height="53" rx="11.5" fill="none" stroke="#46515e" />
+  <path d="M18 17v29h18" stroke="#d8f3e9" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M41 24v16M49 19v26" stroke="#a4d7c7" stroke-width="4" fill="none" stroke-linecap="round" />
+</svg>

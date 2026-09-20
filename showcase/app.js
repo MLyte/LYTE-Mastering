@@ -3,6 +3,20 @@ const fallback = `https://github.com/${repository}/releases`;
 const status = document.querySelector("[data-download-status]");
 const version = document.querySelector("[data-release-version]");
 const date = document.querySelector("[data-release-date]");
+const english = document.documentElement.lang === "en";
+const copy = english ? {
+  latest: "Latest release", beta: "beta", published: "Published on",
+  available: "Available on GitHub", direct: "direct download",
+  choose: "Latest release found · choose the installer on GitHub",
+  consult: "Visit GitHub to download",
+  unavailable: "Link to GitHub releases — availability needs checking."
+} : {
+  latest: "Dernière version", beta: "bêta", published: "Publiée le",
+  available: "Disponible sur GitHub", direct: "téléchargement direct",
+  choose: "Dernière release trouvée · choisir l’installateur sur GitHub",
+  consult: "Consulter GitHub pour télécharger",
+  unavailable: "Lien vers les releases GitHub — disponibilité à vérifier."
+};
 
 function setDownload(url) {
   document.querySelectorAll("[data-download]").forEach((link) => {
@@ -11,7 +25,7 @@ function setDownload(url) {
 }
 
 function formatDate(value) {
-  return new Intl.DateTimeFormat("fr-BE", { day: "numeric", month: "long", year: "numeric" }).format(new Date(value));
+  return new Intl.DateTimeFormat(english ? "en-GB" : "fr-BE", { day: "numeric", month: "long", year: "numeric" }).format(new Date(value));
 }
 
 async function loadRelease() {
@@ -26,15 +40,15 @@ async function loadRelease() {
     const installer = release.assets.find((asset) => /\.exe$/i.test(asset.name));
     const destination = installer?.browser_download_url || release.html_url || fallback;
     setDownload(destination);
-    const releaseName = release.name || release.tag_name || "Dernière version";
-    version.textContent = /b[êe]ta/i.test(releaseName) ? releaseName : `${releaseName} · bêta`;
-    date.textContent = release.published_at ? `Publiée le ${formatDate(release.published_at)}` : "Disponible sur GitHub";
-    status.textContent = installer ? `${installer.name} · téléchargement direct` : "Dernière release trouvée · choisir l’installateur sur GitHub";
+    const releaseName = release.name || release.tag_name || copy.latest;
+    version.textContent = /b[êe]ta/i.test(releaseName) ? releaseName : `${releaseName} · ${copy.beta}`;
+    date.textContent = release.published_at ? `${copy.published} ${formatDate(release.published_at)}` : copy.available;
+    status.textContent = installer ? `${installer.name} · ${copy.direct}` : copy.choose;
   } catch (error) {
     setDownload(fallback);
-    version.textContent = "Dernière version · bêta";
-    date.textContent = "Consulter GitHub pour télécharger";
-    status.textContent = "Lien vers les releases GitHub — disponibilité à vérifier.";
+    version.textContent = `${copy.latest} · ${copy.beta}`;
+    date.textContent = copy.consult;
+    status.textContent = copy.unavailable;
   }
 }
 
