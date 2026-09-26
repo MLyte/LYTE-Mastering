@@ -225,3 +225,9 @@ a:focus-visible { outline-color: #a4d7c7; }
   .feature-row li, .feature-row li:nth-child(3n), .feature-row li:nth-last-child(-n + 3) { min-height: 0; border-right: 0; border-bottom: 1px solid #46515e; }
   .feature-row li:last-child { border-bottom: 0; }
 }
+
+/* Illustrative Auto comparison: example values, no quality score. */
+.product-body .mockup-note { margin: 12px 0 0; color: #aab2be; font-size: 11px; line-height: 1.45; }
+.product-body button:disabled { cursor: default; opacity: 1; }
+
+.product-shell .variant-row > b { color: #d8f3e9; }

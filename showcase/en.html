@@ -116,87 +116,89 @@
           </dl>
         </div>
 
-        <div class="product-shell" aria-label="LYTE Mastering interface preview">
+        <div class="product-shell" aria-label="Illustrative preview of LYTE Mastering Auto comparison">
           <div class="product-topbar"><div class="product-brand"><i>L</i><strong>LYTE Mastering</strong></div><span class="live"><b></b> LOCAL ENGINE</span></div>
           <div class="product-body">
-            <p class="interface-eyebrow">MASTER A TRACK</p>
-            <h2>Your track.<br />Your direction.</h2>
+            <p class="interface-eyebrow">COMPARE BY LISTENING</p>
+            <h2>Three renders.<br />Your choice.</h2>
             <div class="track-card"><span class="file-icon">♫</span><span><b>hypnotic_sequence.wav</b><small>WAV · 48&nbsp;kHz · 24&nbsp;bit</small></span><i>✓</i></div>
             <div class="segmented"><span>Manual</span><b>Auto — Hard Techno</b></div>
-            <div class="recommendation"><p>RECOMMENDATION</p><strong>−4.5&nbsp;dB · Bass on</strong><span>Controlled low-end balance and dynamics</span></div>
-            <div class="variant-row winner"><b><small>01</small> −4.5&nbsp;dB</b><span>Eligible</span><strong>92<small>/100</small></strong></div>
-            <div class="variant-row"><b><small>02</small> −5.0&nbsp;dB</b><span>Eligible</span><strong>89<small>/100</small></strong></div>
-            <button type="button" tabindex="-1">EXPORT SELECTED MASTER <span>→</span></button>
+            <div class="recommendation"><p>SHARED TARGET</p><strong>−5.0&nbsp;LUFS</strong><span>Matched level · visible analyses</span></div>
+            <div class="variant-row"><b><small>01</small> Fidèle</b><span>Measured</span><strong>−5.2<small> LUFS</small></strong></div>
+            <div class="variant-row winner"><b><small>02</small> Dense</b><span>Playing</span><strong>−5.0<small> LUFS</small></strong></div>
+            <div class="variant-row"><b><small>03</small> Agressif</b><span>Measured</span><strong>−4.9<small> LUFS</small></strong></div>
+            <button type="button" tabindex="-1" disabled>EXPORT SELECTED WAV <span>→</span></button>
+            <p class="mockup-note">Illustration · example values, not guaranteed results.</p>
           </div>
           <div class="product-footer">PHASELIMITER ENGINE <span>Always on your computer.</span></div>
         </div>
       </section>
 
       <section class="workflow section" id="workflow" aria-labelledby="workflow-title">
-        <div class="section-heading"><p class="eyebrow"><span></span> Auto — Hard Techno</p><h2 id="workflow-title">Density.<br /><em>Weight. Impact.</em></h2><p>LYTE Mastering takes a <strong>hard techno direction: a dense master, a defined kick and a low end that holds its ground</strong>. Auto mode explores that balance on your mix: pushing the level, then measuring how processing changes the peak-to-average ratio and low-end balance.</p></div>
+        <div class="section-heading"><p class="eyebrow"><span></span> Auto — Hard Techno</p><h2 id="workflow-title">Density.<br /><em>Weight. Impact.</em></h2><p>Auto mode offers <strong>three Hard Techno profiles: Fidèle, Dense and Agressif</strong>. They explore different balances between density, dynamics and low end. Measurements describe the changes; listening helps you choose the render that suits your mix.</p></div>
         <ol class="steps">
           <li>
-            <span>01</span><h3>Exploring density</h3>
+            <span>01</span><h3>Compare three profiles</h3>
             <figure class="process-diagram">
-              <div class="diagram-source">The same mix</div>
+              <div class="diagram-source">One mix · one shared target</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-targets"><b>Cautious start</b><b>+1&nbsp;dB</b><b>+0.5&nbsp;dB refine</b></div>
+              <div class="diagram-targets"><b>Fidèle</b><b>Dense</b><b>Agressif</b></div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Measure → −1&nbsp;dBTP ceiling</div>
-              <figcaption>The number of trials adapts to the track measurements.</figcaption>
+              <div class="diagram-result">Final calibration · WAV ≤ −1&nbsp;dBTP</div>
+              <figcaption>Three processing settings, followed by level calibration for each render.</figcaption>
             </figure>
-            <p><a class="source-link" href="https://github.com/ai-mastering/phaselimiter">PhaseLimiter</a> starts from a cautious target derived from the track, then <strong>moves up in 1&nbsp;dB steps at an intensity of 1.00</strong>. Near the boundary, it refines by 0.5&nbsp;dB.</p>
-            <p>Each output is measured in integrated LUFS, then attenuated if needed to aim for a <strong>−1&nbsp;dBTP ceiling</strong>.</p>
-            <p>The final level may differ from the target: you are comparing different amounts of processing on the same mix.</p>
+            <p><a class="source-link" href="https://github.com/ai-mastering/phaselimiter">PhaseLimiter</a> processes the mix with <strong>three predefined profiles</strong>. Each combines a different intensity, low-end priority and saturation settings.</p>
+            <p>Outputs are measured in integrated LUFS. Final calibration seeks the shared target while maintaining a <strong>−1&nbsp;dBTP WAV ceiling</strong>.</p>
+            <p>The target can remain out of reach: the app then shows the achieved level and its difference from the target.</p>
           </li>
           <li>
-            <span>02</span><h3>Monitoring kick and low end</h3>
+            <span>02</span><h3>Read the measured changes</h3>
             <figure class="process-diagram">
               <div class="diagram-source">Compared with the source mix</div>
-              <div class="diagram-check"><b>Peak factor</b><em>Loss ≤ 3&nbsp;dB</em></div>
-              <div class="diagram-check"><b>Low end · 30–150&nbsp;Hz</b><em>Change within ±2&nbsp;dB</em></div>
-              <div class="diagram-result">Selected candidate → Preserve bass test</div>
-              <figcaption>Selection thresholds, not measurements of your track.</figcaption>
+              <div class="diagram-check"><b>Crest factor</b><em>Measured loss</em></div>
+              <div class="diagram-check"><b>Low end · 30–150&nbsp;Hz</b><em>Measured change</em></div>
+              <div class="diagram-result">Limits specific to each profile</div>
+              <figcaption>Diagnostics to guide listening, without grading musical quality.</figcaption>
             </figure>
-            <p>The app stops raising the target when loudness plateaus or a guardrail is crossed, then tests <strong>Preserve bass on the best measured candidate</strong>.</p>
-            <p>It requires a peak-factor loss of <strong>no more than 3&nbsp;dB</strong>, low end between <strong>30 and 150&nbsp;Hz</strong> within <strong>±2&nbsp;dB of the source mix</strong>, and an AAC test at <strong>0&nbsp;dBTP or below</strong>.</p>
-            <p>These guardrails monitor overall dynamics, low-end weight and post-encoding peaks. On their own, they do not measure kick attack or separation between kick and rumble.</p>
+            <p>The recommendation considers crest-factor loss and low-end change. <strong>Limits depend on the profile</strong>: they are stricter for Fidèle and wider for Agressif.</p>
+            <p>A local AAC encode/decode check flags peaks above <strong>0&nbsp;dBTP</strong>. This warning is separate from WAV selection: it does not automatically make the render ineligible.</p>
+            <p>These measurements cannot fully judge kick attack, pumping or kick / rumble separation. Listen for these before exporting.</p>
           </li>
           <li>
-            <span>03</span><h3>Making the listening decision</h3>
+            <span>03</span><h3>Choose while listening</h3>
             <figure class="process-diagram">
-              <div class="diagram-source">Source + measured variants</div>
+              <div class="diagram-source">Three renders + their analyses</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Preview at the quietest version’s level</div>
+              <div class="diagram-result">Matched or original level</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Listen → choose → export</div>
-              <figcaption>Preview gain is adjusted; the files remain unchanged.</figcaption>
+              <div class="diagram-result">Listen → choose → export WAV</div>
+              <figcaption>Level matching adjusts playback gain without changing the files.</figcaption>
             </figure>
-            <p>A <strong>technical-balance indicator</strong> combines level, true peak, peak factor, low end and AAC safety to rank eligible variants.</p>
-            <p>If none meets every guardrail, LYTE only shows the least aggressive candidate and says that keeping the source or revisiting the mix is safer.</p>
-            <p>Level-adjusted preview lets you compare <strong>attack, saturation texture and rumble definition</strong>. The recommendation guides listening; it does not certify the quality of the master.</p>
+            <p>All three renders are <strong>loaded automatically into the comparator</strong>. Their analyses stay visible during playback: LUFS, true peak, dynamics and low-end changes, AAC checks and diagnostics.</p>
+            <p>The recommendation guides your choice without certifying sound quality. <strong>If no profile stays within its limits, no recommendation is shown</strong>; all three renders remain available to listen to and export.</p>
+            <p>A separate comparator also lets you browse a local folder and compare <strong>up to four WAV, FLAC, MP3 or M4A files</strong>, at matched or original levels.</p>
           </li>
         </ol>
       </section>
       <section class="free-private section" id="free-private" aria-labelledby="free-private-title">
         <div class="free-copy"><p class="eyebrow"><span></span> Actually free</p><h2 id="free-private-title">0&nbsp;<span class="currency" aria-label="euros">€</span> to improve<br /><em>your next track.</em></h2><p>Professional mastering is a paid service. LYTE Mastering gives you another way to work, with <strong>no subscription, no credits and no account</strong>: try, compare and export as often as you need.</p></div>
-        <div class="privacy-card"><p class="card-kicker">YOUR FILES STAY WITH YOU</p><h3>No cloud.<br />No uploads.</h3><p><strong>Your audio is never uploaded.</strong> LYTE Mastering processes the track on your computer, then creates the master in the source file’s folder.</p><ul><li>WAV, FLAC and MP3 imported locally</li><li>The engine and dependencies are installed with the app</li><li>A separate export; the original stays intact</li></ul></div>
+        <div class="privacy-card"><p class="card-kicker">YOUR FILES STAY WITH YOU</p><h3>No cloud.<br />No uploads.</h3><p><strong>Your audio is never uploaded.</strong> LYTE Mastering processes the track on your computer. WAV files you choose to export are saved in the source file’s folder.</p><ul><li>WAV, FLAC and MP3 imported locally</li><li>The engine and dependencies are installed with the app</li><li>A separate export; the original stays intact</li></ul></div>
       </section>
 
       <section class="technical section" id="technical" aria-labelledby="technical-title">
-        <div class="section-heading"><p class="eyebrow"><span></span> Built for producers</p><h2 id="technical-title">Clear controls.<br /><em>The choices stay yours.</em></h2><p>LYTE Mastering runs <strong>PhaseLimiter locally</strong>: you stay in control of the <strong>target, intensity and low end</strong>, without being locked into an opaque preset.</p></div>
+        <div class="section-heading"><p class="eyebrow"><span></span> Built for producers</p><h2 id="technical-title">Clear controls.<br /><em>The choices stay yours.</em></h2><p>LYTE Mastering runs <strong>PhaseLimiter locally</strong>. <strong>Manual</strong> mode exposes target, intensity and low-end controls; <strong>Auto</strong> prepares three profiles to compare.</p></div>
         <div class="feature-overview" aria-labelledby="feature-overview-title">
           <p id="feature-overview-title">AUDIO PROCESSING</p>
           <ul class="feature-row">
             <li><strong>Local PhaseLimiter</strong><span>The engine analyses and processes the track on your machine.</span></li>
-            <li><strong>Target & intensity</strong><span>Two independent controls for level and processing amount.</span></li>
-            <li><strong>Progressive search</strong><span>Auto mode raises the level until it finds the best measured zone.</span></li>
-            <li><strong>Level-matched listening</strong><span>Variants are attenuated to compare their sonic character.</span></li>
-            <li><strong>Preserve bass</strong><span>A weighting option that gives more priority to the low end.</span></li>
-            <li><strong>Dynamic low end</strong><span>Gentle control below 150 Hz to limit excessive buildup.</span></li>
-            <li><strong>Optional soft clip</strong><span>From 0 to 2 dB to round selected short peaks.</span></li>
-            <li><strong>True-peak ceiling</strong><span>The exported master is capped at −1 dBTP.</span></li>
-            <li><strong>Post-export measurements</strong><span>LUFS, dBTP, crest factor, low end and a local AAC check.</span></li>
+            <li><strong>Manual controls</strong><span>Target and intensity can be adjusted independently.</span></li>
+            <li><strong>Three Auto profiles</strong><span>Fidèle, Dense and Agressif aim for one shared target.</span></li>
+            <li><strong>Level-matched listening</strong><span>Playback gain is reduced to match the quietest file.</span></li>
+            <li><strong>Preserve bass</strong><span>A weighting option gives priority to the low end.</span></li>
+            <li><strong>Dynamic low end</strong><span>Control below 150 Hz to limit excessive buildup.</span></li>
+            <li><strong>Optional soft clip</strong><span>In Manual, 0 to 2 dB to round short peaks.</span></li>
+            <li><strong>WAV ceiling</strong><span>Produced WAV files are capped at −1 dBTP.</span></li>
+            <li><strong>Analyses while listening</strong><span>Auto measurements and diagnostics stay visible during playback.</span></li>
           </ul>
         </div>        <div class="technical-grid">
           <article>
@@ -208,7 +210,7 @@
               </div>
               <figcaption>Illustrative Manual mode example: a −8.5&nbsp;dB target with intensity halfway up. The two settings are independent.</figcaption>
             </figure>
-            <p><strong>The target sets the level requested from the engine.</strong> Measured output loudness also depends on your mix and the processing.</p>
+            <p>In Manual mode, <strong>the dB target is an instruction to the engine</strong>, not a promise of output LUFS. Measured output loudness also depends on your mix and the processing.</p>
             <p><strong>Intensity controls the amount of processing.</strong> Adjust it independently of the target to find your balance between density and dynamics.</p>
             <small>REFERENCE · MATCHING LEVEL</small>
           </article>
@@ -222,24 +224,24 @@
               <div class="diagram-result">Listen for low-end weight</div>
               <figcaption>A change in weighting, not a preset EQ curve.</figcaption>
             </figure>
-            <p>Enable <strong>Preserve bass</strong> when the low end needs priority. This option changes the engine’s weighting.</p>
+            <p>In Manual mode, enable <strong>Preserve bass</strong> when the low end needs priority. This option changes the engine’s weighting.</p>
             <p>Compare the output with and without the option: <strong>kick weight, sub sustain and rumble definition</strong>. The option’s name does not guarantee an unchanged low end.</p>
             <small>PRESERVE BASS · LOW-END FOCUS</small>
           </article>
           <article>
             <div class="tech-top"><span>03</span></div><h3>Auto — Hard Techno</h3>
             <figure class="process-diagram">
-              <div class="diagram-targets"><b>Cautious start</b><b>+1&nbsp;dB</b><b>+0.5&nbsp;dB refine</b></div>
-              <div class="diagram-source">Adaptive search · Preserve bass OFF</div>
+              <div class="diagram-source">Built-in or your own reference</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Best candidate → bass ON verification</div>
+              <div class="diagram-targets"><b>Fidèle</b><b>Dense</b><b>Agressif</b></div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Measure and rank every render</div>
-              <figcaption>Start, stop and refinement are driven by measurements.</figcaption>
+              <div class="diagram-result">Compare → WAV · optional AAC</div>
+              <figcaption>The reference guides the Auto target and comparison of measured characteristics.</figcaption>
             </figure>
-            <p><strong>The target count varies with the track</strong>: 1&nbsp;dB steps, an optional 0.5&nbsp;dB refinement, then a Preserve bass verification of the best candidate.</p>
-            <p>LYTE Mastering compares <strong>integrated LUFS, true peak and peak factor</strong>, plus an estimate of relative low-end level between <strong>30 and 150&nbsp;Hz</strong>.</p>
-            <small>ADAPTIVE SEARCH · FFmpeg EBU R128</small>
+            <p>Use the <strong>built-in Hard Techno reference</strong> or import your own. Its measured level caps the Auto target, within −9 to −2&nbsp;LUFS; you can request a quieter level.</p>
+            <p>Reference similarity compares measured characteristics of the analysed passages. <strong>It is not a sound-quality score.</strong></p>
+            <p>After choosing an Auto render, you can also export a <strong>256&nbsp;kb/s AAC copy in M4A format</strong>. The app measures its peaks after decoding and attenuates that copy if needed; the WAV remains unchanged.</p>
+            <small>REFERENCE · ANALYSES · EXPORTS</small>
           </article>
         </div>
       </section>

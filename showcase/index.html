@@ -116,87 +116,89 @@
           </dl>
         </div>
 
-        <div class="product-shell" aria-label="Aperçu de l’interface LYTE Mastering">
+        <div class="product-shell" aria-label="Aperçu illustratif de la comparaison Auto de LYTE Mastering">
           <div class="product-topbar"><div class="product-brand"><i>L</i><strong>LYTE Mastering</strong></div><span class="live"><b></b> LOCAL ENGINE</span></div>
           <div class="product-body">
-            <p class="interface-eyebrow">MASTER A TRACK</p>
-            <h2>Votre morceau.<br />Votre direction.</h2>
+            <p class="interface-eyebrow">ÉCOUTE COMPARATIVE</p>
+            <h2>Trois rendus.<br />À vous de choisir.</h2>
             <div class="track-card"><span class="file-icon">♫</span><span><b>hypnotic_sequence.wav</b><small>WAV · 48&nbsp;kHz · 24&nbsp;bit</small></span><i>✓</i></div>
             <div class="segmented"><span>Manual</span><b>Auto — Hard Techno</b></div>
-            <div class="recommendation"><p>RECOMMANDATION</p><strong>−4.5&nbsp;dB · Bass on</strong><span>Équilibre grave et dynamique contrôlé</span></div>
-            <div class="variant-row winner"><b><small>01</small> −4.5&nbsp;dB</b><span>Eligible</span><strong>92<small>/100</small></strong></div>
-            <div class="variant-row"><b><small>02</small> −5.0&nbsp;dB</b><span>Eligible</span><strong>89<small>/100</small></strong></div>
-            <button type="button" tabindex="-1">EXPORT SELECTED MASTER <span>→</span></button>
+            <div class="recommendation"><p>CIBLE COMMUNE</p><strong>−5,0&nbsp;LUFS</strong><span>Niveau égalisé · analyses visibles</span></div>
+            <div class="variant-row"><b><small>01</small> Fidèle</b><span>Mesuré</span><strong>−5,2<small> LUFS</small></strong></div>
+            <div class="variant-row winner"><b><small>02</small> Dense</b><span>À l’écoute</span><strong>−5,0<small> LUFS</small></strong></div>
+            <div class="variant-row"><b><small>03</small> Agressif</b><span>Mesuré</span><strong>−4,9<small> LUFS</small></strong></div>
+            <button type="button" tabindex="-1" disabled>EXPORTER LE WAV CHOISI <span>→</span></button>
+            <p class="mockup-note">Illustration · valeurs d’exemple, pas des résultats garantis.</p>
           </div>
           <div class="product-footer">PHASELIMITER ENGINE <span>Always on your computer.</span></div>
         </div>
       </section>
 
       <section class="workflow section" id="workflow" aria-labelledby="workflow-title">
-        <div class="section-heading"><p class="eyebrow"><span></span> Auto — Hard Techno</p><h2 id="workflow-title">De la densité.<br /><em>Du poids. De l’impact.</em></h2><p>LYTE Mastering assume une direction <strong>hard techno : un master dense, un kick qui reste lisible et un grave qui garde sa place</strong>. Le mode Auto explore ce compromis sur votre mix : pousser le niveau, puis mesurer ce que le traitement change dans le rapport crêtes / niveau moyen et dans l’équilibre du bas du spectre.</p></div>
+        <div class="section-heading"><p class="eyebrow"><span></span> Auto — Hard Techno</p><h2 id="workflow-title">De la densité.<br /><em>Du poids. De l’impact.</em></h2><p>Le mode Auto propose <strong>trois profils Hard Techno : Fidèle, Dense et Agressif</strong>. Ils explorent différents compromis entre densité, dynamique et grave. Les mesures décrivent les changements ; l’écoute vous aide à choisir le rendu qui convient à votre mix.</p></div>
         <ol class="steps">
           <li>
-            <span>01</span><h3>Explorer la densité</h3>
+            <span>01</span><h3>Comparer trois profils</h3>
             <figure class="process-diagram">
-              <div class="diagram-source">Un même mix</div>
+              <div class="diagram-source">Un même mix · une cible commune</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-targets"><b>Départ prudent</b><b>+1&nbsp;dB</b><b>Affinage +0,5&nbsp;dB</b></div>
+              <div class="diagram-targets"><b>Fidèle</b><b>Dense</b><b>Agressif</b></div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Mesure → plafond −1&nbsp;dBTP</div>
-              <figcaption>Le nombre d&rsquo;essais s&rsquo;adapte aux mesures du morceau.</figcaption>
+              <div class="diagram-result">Calibration finale · WAV ≤ −1&nbsp;dBTP</div>
+              <figcaption>Trois réglages de traitement, puis une calibration du niveau de chaque rendu.</figcaption>
             </figure>
-            <p><a class="source-link" href="https://github.com/ai-mastering/phaselimiter">PhaseLimiter</a> part d&rsquo;une cible prudente calculée depuis le morceau, puis <strong>monte par pas de 1&nbsp;dB à intensité 1,00</strong>. Près de la limite, il affine par pas de 0,5&nbsp;dB.</p>
-            <p>Chaque sortie est mesurée en LUFS intégrés, puis atténuée si nécessaire pour viser un <strong>plafond de −1&nbsp;dBTP</strong>.</p>
-            <p>Le niveau final peut différer de la cible : vous comparez plusieurs degrés de traitement sur le même mix.</p>
+            <p><a class="source-link" href="https://github.com/ai-mastering/phaselimiter">PhaseLimiter</a> traite le mix avec <strong>trois profils prédéfinis</strong>. Chacun combine une intensité, une priorité donnée au grave et des réglages de saturation différents.</p>
+            <p>Les sorties sont mesurées en LUFS intégrés. Une calibration finale cherche la cible commune tout en maintenant un <strong>plafond WAV de −1&nbsp;dBTP</strong>.</p>
+            <p>La cible peut rester hors d’atteinte : l’app affiche alors le niveau obtenu et son écart à la cible.</p>
           </li>
           <li>
-            <span>02</span><h3>Surveiller le kick et le grave</h3>
+            <span>02</span><h3>Lire les changements mesurés</h3>
             <figure class="process-diagram">
               <div class="diagram-source">Comparaison au mix source</div>
-              <div class="diagram-check"><b>Facteur de crête</b><em>Perte ≤ 3&nbsp;dB</em></div>
-              <div class="diagram-check"><b>Grave · 30–150&nbsp;Hz</b><em>Écart ≤ ±2&nbsp;dB</em></div>
-              <div class="diagram-result">Candidat retenu → test Preserve bass</div>
-              <figcaption>Seuils de sélection, pas des mesures de votre morceau.</figcaption>
+              <div class="diagram-check"><b>Facteur de crête</b><em>Perte mesurée</em></div>
+              <div class="diagram-check"><b>Grave · 30–150&nbsp;Hz</b><em>Écart mesuré</em></div>
+              <div class="diagram-result">Limites propres à chaque profil</div>
+              <figcaption>Des diagnostics pour orienter l’écoute, sans noter la qualité musicale.</figcaption>
             </figure>
-            <p>L&rsquo;app arrête la montée lorsque le niveau plafonne ou qu&rsquo;un garde-fou est franchi, puis teste <strong>Preserve bass sur le meilleur candidat mesuré</strong>.</p>
-            <p>Elle exige une perte de facteur de crête de <strong>3&nbsp;dB maximum</strong>, un grave entre <strong>30 et 150&nbsp;Hz</strong> à <strong>±2&nbsp;dB du mix source</strong> et un test AAC à <strong>0&nbsp;dBTP ou moins</strong>.</p>
-            <p>Ces garde-fous surveillent la dynamique globale, le poids du bas et les crêtes après encodage. Ils ne mesurent pas à eux seuls l&rsquo;attaque du kick ni la séparation kick / rumble.</p>
+            <p>La recommandation tient compte de la perte de facteur de crête et de la variation du grave. <strong>Les limites dépendent du profil</strong> : elles sont plus strictes pour Fidèle et plus larges pour Agressif.</p>
+            <p>Un contrôle local après encodage AAC signale les crêtes au-dessus de <strong>0&nbsp;dBTP</strong>. Cet avertissement est distinct de la sélection du WAV : il ne rend pas automatiquement le rendu inéligible.</p>
+            <p>Ces mesures ne suffisent pas à juger l’attaque du kick, le pumping ou la séparation kick / rumble. Écoutez ces éléments avant d’exporter.</p>
           </li>
           <li>
-            <span>03</span><h3>Arbitrer à l’écoute</h3>
+            <span>03</span><h3>Choisir pendant l’écoute</h3>
             <figure class="process-diagram">
-              <div class="diagram-source">Source + variantes mesurées</div>
+              <div class="diagram-source">Les trois rendus + leurs analyses</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Préécoute au niveau du plus faible</div>
+              <div class="diagram-result">Niveau égalisé ou niveau réel</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Écouter → choisir → exporter</div>
-              <figcaption>Le gain de préécoute est ajusté, les fichiers restent inchangés.</figcaption>
+              <div class="diagram-result">Écouter → choisir → exporter le WAV</div>
+              <figcaption>L’égalisation du niveau ajuste le gain de lecture, sans modifier les fichiers.</figcaption>
             </figure>
-            <p>Un indicateur d&rsquo;<strong>équilibre technique</strong> combine niveau, true peak, facteur de crête, grave et sécurité AAC pour départager les variantes admissibles.</p>
-            <p>Si aucune ne respecte tous les garde-fous, LYTE montre seulement le candidat le moins agressif et indique que conserver la source ou revoir le mix est plus sûr.</p>
-            <p>La préécoute ajuste les niveaux pour comparer <strong>l’attaque, la texture de saturation et la lisibilité du rumble</strong>. La recommandation guide l’écoute ; elle ne certifie pas la qualité du master.</p>
+            <p>Les trois rendus sont <strong>chargés automatiquement dans le comparateur</strong>. Leurs analyses restent visibles pendant l’écoute : LUFS, true peak, écarts de dynamique et de grave, contrôle AAC et diagnostics.</p>
+            <p>La recommandation guide le choix sans certifier la qualité sonore. <strong>Si aucun profil ne respecte ses limites, aucune recommandation n’est affichée</strong> ; les trois rendus restent écoutables et exportables.</p>
+            <p>Un comparateur indépendant permet aussi de parcourir un dossier local et de confronter <strong>jusqu’à quatre fichiers WAV, FLAC, MP3 ou M4A</strong>, à niveau égalisé ou réel.</p>
           </li>
         </ol>
       </section>
       <section class="free-private section" id="free-private" aria-labelledby="free-private-title">
         <div class="free-copy"><p class="eyebrow"><span></span> Gratuit, réellement</p><h2 id="free-private-title">0&nbsp;<span class="currency" aria-label="euros">€</span> pour améliorer<br /><em>votre prochaine track.</em></h2><p>Le mastering professionnel est un service payant. LYTE Mastering vous offre une alternative de travail <strong>sans abonnement, sans crédits et sans compte</strong> : vous pouvez essayer, comparer et exporter autant de fois que nécessaire.</p></div>
-        <div class="privacy-card"><p class="card-kicker">VOS FICHIERS RESTENT CHEZ VOUS</p><h3>Pas de cloud.<br />Pas d’upload.</h3><p><strong>Votre audio n’est jamais envoyé en ligne.</strong> LYTE Mastering traite le morceau sur votre ordinateur, puis crée le master dans le dossier du fichier source.</p><ul><li>WAV, FLAC et MP3 importés localement</li><li>Un moteur et les dépendances installés avec l’app</li><li>Un export distinct ; l’original reste intact</li></ul></div>
+        <div class="privacy-card"><p class="card-kicker">VOS FICHIERS RESTENT CHEZ VOUS</p><h3>Pas de cloud.<br />Pas d’upload.</h3><p><strong>Votre audio n’est jamais envoyé en ligne.</strong> LYTE Mastering traite le morceau sur votre ordinateur. Les WAV que vous choisissez d’exporter sont enregistrés dans le dossier du fichier source.</p><ul><li>WAV, FLAC et MP3 importés localement</li><li>Un moteur et les dépendances installés avec l’app</li><li>Un export distinct ; l’original reste intact</li></ul></div>
       </section>
 
       <section class="technical section" id="technical" aria-labelledby="technical-title">
-        <div class="section-heading"><p class="eyebrow"><span></span> Conçu pour les producteurs</p><h2 id="technical-title">Des réglages lisibles.<br /><em>Des choix qui restent les vôtres.</em></h2><p>LYTE Mastering pilote <strong>PhaseLimiter en local</strong> : vous gardez la main sur la <strong>cible, l’intensité et le grave</strong>, sans vous enfermer dans un préréglage opaque.</p></div>
+        <div class="section-heading"><p class="eyebrow"><span></span> Conçu pour les producteurs</p><h2 id="technical-title">Des réglages lisibles.<br /><em>Des choix qui restent les vôtres.</em></h2><p>LYTE Mastering pilote <strong>PhaseLimiter en local</strong>. Le mode <strong>Manual</strong> expose les réglages de cible, d’intensité et de grave ; le mode <strong>Auto</strong> prépare trois profils à comparer.</p></div>
         <div class="feature-overview" aria-labelledby="feature-overview-title">
           <p id="feature-overview-title">TRAITEMENT AUDIO</p>
           <ul class="feature-row">
             <li><strong>PhaseLimiter local</strong><span>Le moteur analyse et traite le morceau sur votre machine.</span></li>
-            <li><strong>Cible & intensité</strong><span>Deux réglages indépendants pour doser niveau et traitement.</span></li>
-            <li><strong>Recherche progressive</strong><span>Le mode Auto monte le niveau jusqu&rsquo;à trouver la meilleure zone mesurée.</span></li>
-            <li><strong>Écoute à niveau égal</strong><span>Les variantes sont abaissées pour comparer leur caractère sonore.</span></li>
-            <li><strong>Preserve bass</strong><span>Une pondération qui donne plus de priorité au bas du spectre.</span></li>
-            <li><strong>Grave dynamique</strong><span>Un contrôle léger sous 150 Hz pour limiter les débordements.</span></li>
-            <li><strong>Soft clip optionnel</strong><span>De 0 à 2 dB pour arrondir certaines crêtes brèves.</span></li>
-            <li><strong>Plafond true peak</strong><span>Le master exporté est plafonné à −1 dBTP.</span></li>
-            <li><strong>Mesures après export</strong><span>LUFS, dBTP, facteur de crête, grave et contrôle AAC local.</span></li>
+            <li><strong>Réglages Manual</strong><span>Cible et intensité se règlent indépendamment.</span></li>
+            <li><strong>Trois profils Auto</strong><span>Fidèle, Dense et Agressif visent une cible commune.</span></li>
+            <li><strong>Écoute à niveau égal</strong><span>Le gain est abaissé au niveau du fichier le plus faible.</span></li>
+            <li><strong>Preserve bass</strong><span>Une pondération donne plus de priorité au bas du spectre.</span></li>
+            <li><strong>Grave dynamique</strong><span>Un contrôle sous 150 Hz pour limiter les débordements.</span></li>
+            <li><strong>Soft clip optionnel</strong><span>En Manual, de 0 à 2 dB pour arrondir les crêtes.</span></li>
+            <li><strong>Plafond WAV</strong><span>Les WAV produits sont plafonnés à −1 dBTP.</span></li>
+            <li><strong>Analyses à l’écoute</strong><span>Mesures et diagnostics Auto restent visibles pendant la lecture.</span></li>
           </ul>
         </div>        <div class="technical-grid">
           <article>
@@ -208,7 +210,7 @@
               </div>
               <figcaption>Exemple illustratif en mode Manual : une cible de −8,5&nbsp;dB avec une intensité à mi-course. Les deux réglages sont indépendants.</figcaption>
             </figure>
-            <p><strong>La cible définit le niveau demandé au moteur.</strong> Le loudness mesuré en sortie dépend aussi de votre mix et du traitement.</p>
+            <p>En mode Manual, <strong>la cible en dB est une consigne donnée au moteur</strong>, pas une promesse de LUFS en sortie. Le loudness mesuré en sortie dépend aussi de votre mix et du traitement.</p>
             <p><strong>L’intensité règle le degré de traitement.</strong> Vous pouvez la modifier séparément de la cible pour chercher votre compromis entre densité et dynamique.</p>
             <small>REFERENCE · MATCHING LEVEL</small>
           </article>
@@ -222,24 +224,24 @@
               <div class="diagram-result">Comparer le poids du bas à l’écoute</div>
               <figcaption>Un changement de pondération, pas une courbe d’EQ prédéfinie.</figcaption>
             </figure>
-            <p>Activez <strong>Preserve bass</strong> quand le bas du spectre doit rester prioritaire. L’option modifie la pondération du moteur.</p>
+            <p>En mode Manual, activez <strong>Preserve bass</strong> quand le bas du spectre doit rester prioritaire. L’option modifie la pondération du moteur.</p>
             <p>Comparez le rendu avec et sans l’option : <strong>poids du kick, tenue du sub et lisibilité du rumble</strong>. Le nom de l’option ne garantit pas un grave inchangé.</p>
             <small>PRESERVE BASS · LOW-END FOCUS</small>
           </article>
           <article>
             <div class="tech-top"><span>03</span></div><h3>Auto — Hard Techno</h3>
             <figure class="process-diagram">
-              <div class="diagram-targets"><b>Départ prudent</b><b>+1&nbsp;dB</b><b>Affinage +0,5&nbsp;dB</b></div>
-              <div class="diagram-source">Recherche adaptative · Preserve bass OFF</div>
+              <div class="diagram-source">Référence intégrée ou votre référence</div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Meilleur candidat → vérification bass ON</div>
+              <div class="diagram-targets"><b>Fidèle</b><b>Dense</b><b>Agressif</b></div>
               <div class="diagram-arrow" aria-hidden="true">↓</div>
-              <div class="diagram-result">Mesurer et classer tous les rendus</div>
-              <figcaption>Départ, arrêt et affinage déterminés par les mesures.</figcaption>
+              <div class="diagram-result">Comparer → WAV · AAC en option</div>
+              <figcaption>La référence guide la cible Auto et la comparaison des caractéristiques mesurées.</figcaption>
             </figure>
-            <p><strong>Le nombre de cibles varie selon le morceau</strong> : montée par pas de 1&nbsp;dB, affinage éventuel à 0,5&nbsp;dB, puis vérification du meilleur candidat avec Preserve bass.</p>
-            <p>LYTE Mastering compare le <strong>LUFS intégré, le true peak, le facteur de crête</strong> et une estimation du niveau relatif du grave entre <strong>30 et 150&nbsp;Hz</strong>.</p>
-            <small>RECHERCHE ADAPTATIVE · FFmpeg EBU R128</small>
+            <p>Utilisez la <strong>référence Hard Techno intégrée</strong> ou importez la vôtre. Son niveau mesuré borne la cible Auto, entre −9 et −2&nbsp;LUFS ; vous pouvez demander un niveau plus faible.</p>
+            <p>La proximité avec la référence compare des caractéristiques mesurées sur les passages analysés. <strong>Ce n’est pas une note de qualité sonore.</strong></p>
+            <p>Après avoir choisi un rendu Auto, vous pouvez aussi exporter une <strong>copie AAC 256&nbsp;kb/s au format M4A</strong>. L’app en mesure les crêtes après décodage et atténue cette copie si nécessaire ; le WAV reste inchangé.</p>
+            <small>RÉFÉRENCE · ANALYSES · EXPORTS</small>
           </article>
         </div>
       </section>
