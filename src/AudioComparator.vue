@@ -9,9 +9,11 @@ type LibraryScan = { root: string; files: LibraryFile[]; scannedEntries: number;
 type ScanProgress = { scannedEntries: number; audioFiles: number };
 type Measurements = { integratedLufs: number; truePeakDbtp: number; peakFactorDb: number; bassRatioDb: number; aacTruePeakDbtp?: number | null };
 type Analysis = { playbackPath: string; track: { path: string; name: string; extension: string }; waveform: { durationSeconds: number; peaks: number[] }; measurements: Measurements };
-type Slot = { file: LibraryFile; analysis: Analysis };
+type RenderAnalysis = { id: string; path: string; targetLufs: number; achievedDeltaLu: number; attempts: number; peakFactorLossDb: number; bassChangeDb: number; aacRisk: boolean; diagnostics: string[]; referenceSimilarity?: number };
+type AutoAnalysis = { targetLufs: number; recommendedId: string; recommendation: string; source: { integratedLufs: number }; referenceSegment?: { integratedLufs: number }; usingDefaultReference?: boolean; variants: RenderAnalysis[] };
+type Slot = { file: LibraryFile; analysis: Analysis; render?: RenderAnalysis };
 type Project = { id: string; title: string; files: LibraryFile[] };
-const props = withDefaults(defineProps<{ generatedTracks?: LibraryFile[]; sessionId?: string; selectedPath?: string; startSeconds?: number; exportedPaths?: string[]; exporting?: boolean; exportOutput?: string; exportError?: string }>(), { generatedTracks: () => [], exportedPaths: () => [], startSeconds: 0 });
+const props = withDefaults(defineProps<{ renderAnalysis?: AutoAnalysis; generatedTracks?: LibraryFile[]; sessionId?: string; selectedPath?: string; startSeconds?: number; exportedPaths?: string[]; exporting?: boolean; exportOutput?: string; exportError?: string }>(), { generatedTracks: () => [], exportedPaths: () => [], startSeconds: 0 });
 const emit = defineEmits<{ close: []; layout: []; select: [path: string]; export: [path: string]; openFolder: [] }>();
 const generated = computed(() => Boolean(props.sessionId && props.generatedTracks.length));
 const preparing = ref(false);
@@ -179,7 +181,7 @@ async function addTrack(file: LibraryFile) {
       ? await invoke<Analysis>("prepare_auto_comparison", { sessionId: props.sessionId, variantId: file.variantId })
       : await invoke<Analysis>("analyze_comparison_track", { path: file.path });
     if (disposed) { await invoke("revoke_comparison_track", { path: file.path }).catch(() => undefined); return; }
-    slots.value = [...slots.value, { file, analysis }];
+    slots.value = [...slots.value, { file, analysis, render: props.renderAnalysis?.variants.find(variant => variant.path === file.path) }];
     if (!playing.value) activePath.value = file.path;
     announce.value = `Piste ajoutée : ${file.name}`;
     await nextTick();
@@ -266,6 +268,8 @@ function gainLabel(slot: Slot) {
   const delta = matched.value ? comparisonTarget.value - slot.analysis.measurements.integratedLufs : 0;
   return `${delta > 0 ? "+" : ""}${delta.toFixed(1)} dB`;
 }
+function formatMeasurement(value: number | undefined) { return Number.isFinite(value) ? Number(value).toFixed(1) : "—"; }
+function signedMeasurement(value: number) { return Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}` : "—"; }
 function sizeLabel(bytes: number) { return bytes < 1_048_576 ? `${Math.max(1, Math.round(bytes / 1024))} Ko` : `${(bytes / 1_048_576).toFixed(1)} Mo`; }
 function toggleMode(equalized: boolean) { matched.value = equalized; updateVolumes(); }
 function ended(path: string) { if (path === activePath.value) pause(); }
@@ -299,6 +303,12 @@ onUnmounted(() => {
     </header>
 
     <section v-if="generated" class="library-intro"><div><h2>Écoute tes trois rendus Hard Techno.</h2><p>Les variantes sont chargées automatiquement. Lance Lecture, passe de Fidèle à Dense ou Agressif, puis exporte le rendu choisi.</p></div></section>
+    <aside v-if="generated && renderAnalysis" class="auto-analysis" aria-labelledby="auto-analysis-title">
+      <div class="analysis-heading"><h2 id="auto-analysis-title">Analyse des rendus</h2><span>Cible <strong>{{ formatMeasurement(renderAnalysis.targetLufs) }} LUFS</strong> · plafond WAV −1 dBTP</span></div>
+      <div class="analysis-context"><span>Source <strong>{{ formatMeasurement(renderAnalysis.source.integratedLufs) }} LUFS</strong></span><span v-if="renderAnalysis.referenceSegment">{{ renderAnalysis.usingDefaultReference ? 'Référence Hard Techno intégrée' : 'Référence utilisateur' }} · passage <strong>{{ formatMeasurement(renderAnalysis.referenceSegment.integratedLufs) }} LUFS</strong></span></div>
+      <p class="analysis-recommendation"><strong>{{ renderAnalysis.recommendedId ? 'Recommandation' : 'Aucun rendu recommandé' }}</strong>{{ renderAnalysis.recommendation }}</p>
+      <p v-if="renderAnalysis.variants.some(variant => variant.referenceSimilarity != null)" class="reference-note">La similarité à la référence compare les passages analysés. Elle n’est pas une note de qualité et ne remplace pas les diagnostics.</p>
+    </aside>
     <p v-if="preparing" role="status" class="match-note">Préparation de l’écoute… {{ slots.length }} / {{ generatedTracks.length }} rendus prêts.</p>
     <p v-if="generated && trackError && !slots.length" class="compare-error" role="alert">{{ trackError }}</p>
     <template v-if="!generated">
@@ -361,9 +371,20 @@ onUnmounted(() => {
       <p class="match-note">{{ matched ? 'Niveau d’écoute calé sur la piste la plus calme (aucun master n’est amplifié).' : 'Gain original, sans égalisation de loudness.' }} Le volume d’écoute reste réglable sur le PC.</p>
       <div class="deck-list" role="radiogroup" aria-label="Piste entendue">
         <article v-for="slot in slots" :key="slot.file.path" class="deck" :class="{ selected: slot.file.path === activePath }">
-          <div class="deck-heading"><label class="deck-radio"><input type="radio" name="active-master" :value="slot.file.path" :checked="slot.file.path === activePath" @change="selectDeck(slot.file.path)" /><span><strong>{{ slot.file.name }}</strong><small>{{ slot.file.kind === 'source' ? 'Source' : slot.file.profile ? `Master ${displayProfile(slot.file.profile)}` : 'Rendu' }}</small></span></label><button v-if="!generated" class="remove-deck" type="button" :aria-label="`Retirer ${slot.file.name} de l’écoute`" @click="removeTrack(slot.file.path)">×</button></div>
+          <div class="deck-heading"><label class="deck-radio"><input type="radio" name="active-master" :value="slot.file.path" :checked="slot.file.path === activePath" @change="selectDeck(slot.file.path)" /><span><strong>{{ slot.file.name }} <em v-if="slot.render && slot.render.id === renderAnalysis?.recommendedId" class="recommended-badge">Recommandé</em></strong><small>{{ slot.file.kind === 'source' ? 'Source' : slot.file.profile ? `Master ${displayProfile(slot.file.profile)}` : 'Rendu' }}</small></span></label><button v-if="!generated" class="remove-deck" type="button" :aria-label="`Retirer ${slot.file.name} de l’écoute`" @click="removeTrack(slot.file.path)">×</button></div>
           <div class="waveform-row"><div class="waveform" :aria-label="`Forme d’onde de ${slot.file.name}`"><svg viewBox="0 0 240 48" preserveAspectRatio="none" aria-hidden="true"><rect v-for="(peak, index) in slot.analysis.waveform.peaks" :key="index" :x="index" :y="24 - Math.max(1, peak * 22)" width="0.72" :height="Math.max(2, peak * 44)" rx="0.25" /></svg><span class="waveform-cursor" :style="waveformStyle(slot)" /></div><span class="track-duration">{{ formatTime(slot.analysis.waveform.durationSeconds) }}</span></div>
           <div class="deck-measures"><span>LUFS intégré <strong>{{ slot.analysis.measurements.integratedLufs.toFixed(1) }}</strong></span><span>True peak <strong>{{ slot.analysis.measurements.truePeakDbtp.toFixed(1) }} dBTP</strong></span><span>Facteur de crête <strong>{{ slot.analysis.measurements.peakFactorDb.toFixed(1) }} dB</strong></span><span>Grave relatif · 30–150 Hz <strong>{{ slot.analysis.measurements.bassRatioDb.toFixed(1) }} dB</strong></span><span class="aac-measure" :class="{ unsafe: slot.analysis.measurements.aacTruePeakDbtp != null && slot.analysis.measurements.aacTruePeakDbtp > 0 }">AAC · 256 kb/s <strong>{{ slot.analysis.measurements.aacTruePeakDbtp == null ? '—' : `${slot.analysis.measurements.aacTruePeakDbtp.toFixed(1)} dBTP` }}</strong></span><span v-if="matched">Gain d’écoute <strong>{{ gainLabel(slot) }}</strong></span></div>
+          <div v-if="generated && slot.render" class="render-analysis">
+            <dl class="render-metrics">
+              <div><dt>Cible</dt><dd>{{ formatMeasurement(slot.render.targetLufs) }} LUFS</dd></div>
+              <div><dt>Écart à la cible</dt><dd>{{ signedMeasurement(slot.render.achievedDeltaLu) }} LU</dd></div>
+              <div><dt>Facteur de crête · écart source</dt><dd>{{ signedMeasurement(-slot.render.peakFactorLossDb) }} dB</dd></div>
+              <div><dt>Grave · écart source</dt><dd>{{ signedMeasurement(slot.render.bassChangeDb) }} dB</dd></div>
+              <div><dt>Tentatives</dt><dd>{{ slot.render.attempts }}</dd></div>
+              <div v-if="slot.render.referenceSimilarity != null"><dt>Similarité à la référence</dt><dd>{{ slot.render.referenceSimilarity }}/100</dd></div>
+            </dl>
+            <ul v-if="slot.render.diagnostics.length" class="render-diagnostics"><li v-for="note in slot.render.diagnostics" :key="note">{{ note }}</li></ul>
+          </div>
           <audio :ref="element => setAudioRef(slot.file.path, element)" :src="convertFileSrc(slot.analysis.playbackPath)" preload="auto" @timeupdate="updatePlayhead(slot.file.path, $event)" @ended="ended(slot.file.path)" @error="playbackError(slot, $event)" />
         </article>
       </div>
@@ -471,6 +492,22 @@ input, select { min-width: 0; border: 1px solid #3b4550; border-radius: 4px; pad
 .compare-error { color: #f1a38b; font-size: 12px; }
 .compare-footer { display: flex; justify-content: space-between; margin-top: 20px; border-top: 1px solid #2b313b; padding-top: 14px; color: #9aa5b3; font-size: 10px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.auto-analysis { margin: 16px 0; padding: 16px; border: 1px solid #40534e; border-radius: 7px; background: #182220; }
+.analysis-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 10px; }
+.analysis-heading > span, .analysis-context { color: #b5c3c4; font-size: 12px; }
+.analysis-heading strong, .analysis-context strong { color: #e0ede7; }
+.analysis-context { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 10px; }
+.analysis-recommendation { margin: 12px 0 0; color: #d6e3df; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.analysis-recommendation > strong { display: block; margin-bottom: 4px; color: #b3dfcd; }
+.reference-note { margin: 9px 0 0; color: #adb7c1; font-size: 11px; line-height: 1.5; }
+.recommended-badge { display: inline-block; margin-left: 8px; border: 1px solid #6c9d8a; border-radius: 4px; padding: 2px 5px; color: #b3dfcd; font-size: 10px; font-style: normal; font-weight: 650; }
+.render-analysis { margin-top: 12px; border-top: 1px solid #2d3b3b; padding-top: 10px; }
+.render-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)); gap: 9px 20px; margin: 0; }
+.render-metrics > div { min-width: 0; }
+.render-metrics dt { color: #adb7c1; font-size: 11px; line-height: 1.4; }
+.render-metrics dd { margin: 3px 0 0; color: #e0e8e5; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.render-diagnostics { display: grid; gap: 5px; margin: 12px 0 0; padding-left: 17px; color: #c4cdd1; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+@media (min-width: 1200px) { .render-diagnostics { grid-template-columns: 1fr 1fr; column-gap: 30px; } }
 @media (max-width: 760px) { .compare-shell { padding: 22px 18px; } .project-layout { grid-template-columns: 1fr; } .project-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 4px; } .project-list > .compare-eyebrow, .create-project { grid-column: 1 / -1; } .library-file { grid-template-columns: minmax(0, 1fr) auto; } .assign-control { grid-column: 1; } .add-file { grid-column: 2; grid-row: 1 / span 2; } }
 @media (max-width: 520px) { .compare-shell { padding: 17px 12px; } .compare-header, .library-intro { align-items: flex-start; } .compare-header { flex-wrap: wrap; } .library-intro { flex-direction: column; } .library-actions { width: 100%; } .library-actions button { flex: 1; } .volume-modes { grid-template-columns: 1fr; } .deck-measures { display: grid; grid-template-columns: 1fr 1fr; } .transport { align-items: stretch; } .timeline { flex-basis: 100%; } .unassigned-row { grid-template-columns: 1fr; gap: 5px; } .project-heading, .project-heading-actions, .unlink-confirmation { align-items: flex-start; flex-direction: column; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }

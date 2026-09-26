@@ -189,6 +189,13 @@ test('Auto opens three listening decks and exports the chosen variant before any
   await expect(page.locator('.deck')).toHaveCount(3)
   await expect(page.getByRole('button', { name:'Lecture', exact:true })).toBeEnabled()
   await expect(page.locator('.deck.selected')).toContainText('Dense')
+  await expect(page.locator('.auto-analysis')).toContainText('Dense recommendation.')
+  await expect(page.locator('.render-analysis')).toHaveCount(3)
+  await expect(page.locator('.recommended-badge')).toHaveCount(1)
+  await expect(page.locator('.deck').filter({ hasText:'Dense' }).locator('.recommended-badge')).toHaveText('Recommandé')
+  for (const label of ['Fidèle','Dense','Agressif']) await expect(page.locator('.render-diagnostics').filter({ hasText:`${label} diagnostic.` })).toBeVisible()
+  await expect(page.locator('.deck').filter({ hasText:'Agressif' }).locator('.render-metrics')).toContainText('-4.2 dB')
+  await expect(page.locator('.deck').filter({ hasText:'Agressif' }).locator('.render-metrics')).toContainText('+1.5 dB')
   expect(await page.evaluate(() => window.testCalls.filter(call => call.cmd === 'prepare_auto_comparison').map(call => call.args))).toEqual(['faithful','dense','aggressive'].map(variantId => ({sessionId:'session',variantId})))
   expect(await page.evaluate(() => window.testCalls.some(call => call.cmd === 'scan_audio_folder'))).toBe(false)
   await page.getByRole('button', { name:'Lecture', exact:true }).click()
@@ -221,4 +228,53 @@ test('Auto preview failure keeps the render available for export', async ({ page
   await expect(page.getByRole('button', { name:'Export selected master' })).toBeDisabled()
   await page.locator('#variant-faithful').check()
   await expect(page.getByRole('button', { name:'Export selected master' })).toBeEnabled()
+})
+
+
+test('Auto keeps full render analysis visible without inventing a recommendation', async ({ page }) => {
+  await page.setViewportSize({width:1400,height:1000})
+  await mount(page)
+  await page.evaluate(() => {
+    // Mocked asset URLs have no native media server in this browser test.
+    document.addEventListener('error', event => { if (event.target instanceof HTMLMediaElement) event.stopImmediatePropagation() }, true)
+    HTMLMediaElement.prototype.load = function () {}
+    HTMLMediaElement.prototype.play = function () { return Promise.resolve() }
+    HTMLMediaElement.prototype.pause = function () {}
+  })
+  await page.getByRole('button', { name:/Drop a track/ }).click()
+  await page.getByRole('button', { name:/Auto/ }).click()
+  await page.getByRole('button', { name:'RENDER 3 PROFILES' }).click()
+  await page.evaluate(() => {
+    const variants=[window.testVariant('faithful','Fidèle',-7.3,92),window.testVariant('dense','Dense',-8.2,94),window.testVariant('aggressive','Agressif',-7.9,99)]
+    for (const variant of variants) {
+      variant.diagnostics=['La cible LUFS n’est pas atteinte.', 'Le contrôle AAC révèle un risque de dépassement.']
+      variant.aacRisk=true
+      variant.measurements.aacTruePeakDbtp=2.4
+    }
+    const originalAnalysis=window.comparisonAnalysis
+    window.comparisonAnalysis=path=>({...originalAnalysis(path),measurements:variants.find(variant=>path.includes(variant.id)).measurements})
+    window.finishAuto({sessionId:'session',sourcePath:'C:/Temp/source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-5,referenceSegment:window.testMeasurement(-2.9),usingDefaultReference:true,variants,recommendedId:'',recommendation:'Aucun profil ne respecte la cible. Réduire la cible ou revoir le mix.'})
+  })
+  await expect(page.locator('.deck')).toHaveCount(3)
+  await expect(page.getByRole('heading', {name:'Analyse des rendus'})).toBeVisible()
+  await expect(page.locator('.auto-analysis')).toContainText('Aucun rendu recommandé')
+  await expect(page.locator('.auto-analysis')).toContainText('Aucun profil ne respecte la cible.')
+  await expect(page.locator('.auto-analysis')).toContainText('Référence Hard Techno intégrée')
+  await expect(page.locator('.auto-analysis')).toContainText('-2.9 LUFS')
+  await expect(page.locator('.recommended-badge')).toHaveCount(0)
+  await expect(page.locator('.deck').filter({hasText:'Agressif'}).locator('.render-metrics')).toContainText('99/100')
+  await expect(page.locator('.deck').filter({hasText:'Agressif'}).locator('.render-metrics')).toContainText('-2.9 LU')
+  await expect(page.locator('.render-diagnostics')).toHaveCount(3)
+  await expect(page.locator('.render-diagnostics').first()).toContainText('risque de dépassement')
+  await expect(page.locator('.reference-note')).toContainText('Elle n’est pas une note de qualité')
+  fs.mkdirSync('tests/artifacts/analysis-screen',{recursive:true})
+  await page.screenshot({path:'tests/artifacts/analysis-screen/desktop.jpg',fullPage:true,type:'jpeg',quality:55})
+  await page.setViewportSize({width:640,height:900})
+  await expect(page.locator('.render-analysis').last()).toContainText('Le contrôle AAC révèle un risque de dépassement.')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({path:'tests/artifacts/analysis-screen/narrow.jpg',fullPage:true,type:'jpeg',quality:55})
+  await page.getByRole('button', {name:'Lecture',exact:true}).click()
+  await expect(page.getByRole('button', {name:'Pause',exact:true})).toBeEnabled()
+  await page.locator('.deck').filter({hasText:'Dense'}).getByRole('radio').check()
+  await expect(page.locator('.deck.selected .render-diagnostics')).toContainText('La cible LUFS n’est pas atteinte.')
 })

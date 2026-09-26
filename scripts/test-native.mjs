@@ -80,6 +80,9 @@ try {
     const profiles = await page.locator('.deck').count();
     if (profiles !== 3) throw new Error(`Expected three Auto profiles, received ${profiles}`);
     await page.getByRole('heading', { name: 'Écoute tes trois rendus Hard Techno.' }).waitFor();
+    await page.getByRole('heading', { name: 'Analyse des rendus' }).waitFor();
+    if (await page.locator('.render-analysis').count() !== 3) throw new Error('The three Auto analyses must remain visible beside the listening decks');
+    if (!await page.locator('.analysis-recommendation').innerText()) throw new Error('Auto recommendation missing from the listening screen');
     await page.waitForFunction(() => [...document.querySelectorAll('.deck audio')].every(audio => audio.readyState >= 2), null, { timeout: 30000 });
     await page.getByRole('button', { name: 'Lecture', exact: true }).click();
     await page.waitForFunction(() => [...document.querySelectorAll('.deck audio')].every(audio => !audio.paused && audio.currentTime > 0));
