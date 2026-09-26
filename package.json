@@ -1,6 +1,6 @@
 {
   "name": "lyte-mastering",
-  "version": "0.3.0-beta.1",
+  "version": "0.3.0-beta.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
     "test:ui": "npm run build && playwright test",
     "check:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-runtime.ps1 -RequireBundled",
     "test:native": "node scripts/test-native.mjs",
+    "test:native:comparison": "node scripts/test-comparison-native.mjs",
     "prebuild": "node scripts/stamp-build-time.mjs"
   },
   "dependencies": {

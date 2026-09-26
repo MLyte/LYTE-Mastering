@@ -398,6 +398,7 @@ footer span:first-child {
 .technical-balance b i { color: #94aaa4; font-size: 9px; font-style: normal; font-weight: 400; margin-left: 2px; }
 .technical-balance em { grid-column: 1 / -1; color: #a4d7c7; font-size: 10px; font-style: normal; font-weight: 650; }
 .metric-note { margin: 8px 0 12px; color: #8d9b9f !important; font-size: 10px !important; line-height: 1.4 !important; }.recommendation { margin: 10px 0; padding: 9px 10px; border-left: 2px solid #a4d7c7; border-radius: 3px; background: #13201e; color: #b9c9c4; font-size: 10px; line-height: 1.45; }
+.aac-export-options { display: grid; gap: 8px; margin: 0 0 14px; }.aac-export-options p { margin: 0; color: #8d9b9f; font-size: 11px; line-height: 1.45; }
 .recommendation strong { display: block; margin-bottom: 4px; color: #d6e5e0; font-size: 11px; }
 .recommendation p { margin: 0; }
 .mastering-profile { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }

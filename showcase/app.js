@@ -1,5 +1,5 @@
 const repository = "MLyte/LYTE-Mastering";
-const fallback = `https://github.com/${repository}/releases`;
+const fallback = "https://github.com/MLyte/LYTE-Mastering/releases/download/v0.3.0-beta.2/LYTE.Mastering_0.3.0-beta.2_x64-setup.exe";
 const status = document.querySelector("[data-download-status]");
 const version = document.querySelector("[data-release-version]");
 const date = document.querySelector("[data-release-date]");
@@ -9,13 +9,13 @@ const copy = english ? {
   available: "Available on GitHub", direct: "direct download",
   choose: "Latest release found · choose the installer on GitHub",
   consult: "Visit GitHub to download",
-  unavailable: "Link to GitHub releases — availability needs checking."
+  unavailable: "GitHub check unavailable — download the published installer."
 } : {
   latest: "Dernière version", beta: "bêta", published: "Publiée le",
   available: "Disponible sur GitHub", direct: "téléchargement direct",
   choose: "Dernière release trouvée · choisir l’installateur sur GitHub",
   consult: "Consulter GitHub pour télécharger",
-  unavailable: "Lien vers les releases GitHub — disponibilité à vérifier."
+  unavailable: "Vérification GitHub indisponible — télécharger l’installateur publié."
 };
 
 function setDownload(url) {
@@ -46,7 +46,7 @@ async function loadRelease() {
     status.textContent = installer ? `${installer.name} · ${copy.direct}` : copy.choose;
   } catch (error) {
     setDownload(fallback);
-    version.textContent = `${copy.latest} · ${copy.beta}`;
+    version.textContent = `LYTE Mastering v0.3.0-beta.2 · ${copy.beta}`;
     date.textContent = copy.consult;
     status.textContent = copy.unavailable;
   }

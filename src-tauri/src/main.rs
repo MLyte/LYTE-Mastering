@@ -1,13 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Mutex,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,6 +21,9 @@ struct AppState {
     output: Mutex<Option<PathBuf>>,
     session: Mutex<Option<AutoSession>>,
     cancel_requested: AtomicBool,
+    library_root: Arc<Mutex<Option<PathBuf>>>,
+    library_scan_cancel: Arc<AtomicBool>,
+    comparison_previews: Arc<Mutex<HashMap<PathBuf, tempfile::TempDir>>>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,7 +41,9 @@ const AUTO_TARGET_MIN_LUFS: f64 = -9.0;
 const AUTO_TARGET_MAX_LUFS: f64 = -2.0;
 const AUTO_TARGET_TOLERANCE_LU: f64 = 0.3;
 const AAC_TRUE_PEAK_LIMIT: f64 = 0.0;
-const DEFAULT_REFERENCE_FILE: &str = "resources/reference/QUNE - READY TO GO.wav";
+const AAC_DELIVERY_CEILING: f64 = -0.1;
+const AAC_EXPORT_MAX_ATTEMPTS: usize = 6;
+const DEFAULT_REFERENCE_FILE: &str = "resources/reference/reference-track.wav";
 const DEFAULT_REFERENCE_START_SECONDS: f64 = 45.0;
 const DEFAULT_REFERENCE_DURATION_SECONDS: f64 = 30.0;
 static AUTO_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -128,6 +134,7 @@ struct AutoResult {
     using_default_reference: bool,
     variants: Vec<AutoVariant>,
     recommended_id: String,
+    delivery_ready: bool,
     recommendation: String,
 }
 #[derive(Serialize)]
@@ -151,6 +158,46 @@ struct Waveform {
     peaks: Vec<f32>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryFile {
+    path: String,
+    relative_path: String,
+    name: String,
+    extension: String,
+    project_hint: Option<String>,
+    kind: String,
+    profile: Option<String>,
+    bytes: u64,
+    modified_at_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryScan {
+    root: String,
+    files: Vec<LibraryFile>,
+    scanned_entries: usize,
+    errors: Vec<String>,
+    canceled: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryScanProgress {
+    scanned_entries: usize,
+    audio_files: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComparisonTrack {
+    playback_path: String,
+    track: Track,
+    waveform: Waveform,
+    measurements: Measurements,
+}
+
 fn audio_path(path: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(path);
     if !p.is_absolute() || !p.is_file() {
@@ -161,8 +208,8 @@ fn audio_path(path: &str) -> Result<PathBuf, String> {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if !["wav", "flac", "mp3"].contains(&ext.as_str()) {
-        return Err("Choose a WAV, FLAC or MP3 file.".into());
+    if !["wav", "flac", "mp3", "m4a"].contains(&ext.as_str()) {
+        return Err("Choose a WAV, FLAC, MP3 or M4A file.".into());
     }
     fs::File::open(&p)
         .map_err(|_| "The audio file cannot be read. Check its permissions.".to_string())?;
@@ -177,6 +224,294 @@ fn inspect_track(path: String) -> Result<Track, String> {
         path,
     })
 }
+
+fn is_session_stamp(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 11
+        && bytes[..6].iter().all(u8::is_ascii_digit)
+        && bytes[6] == b'-'
+        && bytes[7..].iter().all(u8::is_ascii_digit)
+}
+
+fn normalize_project_title(stem: &str) -> String {
+    let mut title = stem.trim();
+    if title.ends_with(')') {
+        if let Some(open) = title.rfind(" (") {
+            if is_session_stamp(&title[open + 2..title.len() - 1]) {
+                title = title[..open].trim_end();
+            }
+        }
+    }
+    if let Some((base, suffix)) = title.rsplit_once(' ') {
+        if is_session_stamp(suffix) {
+            title = base.trim_end();
+        }
+    }
+    title.to_string()
+}
+
+fn lyte_render_hint(stem: &str) -> Option<(String, String)> {
+    let lower = stem.to_ascii_lowercase();
+    if let Some(marker) = lower.rfind("_hard-techno_") {
+        let base = &stem[..marker];
+        let suffix = &lower[marker + "_hard-techno_".len()..];
+        for profile in ["faithful", "dense", "aggressive"] {
+            let prefix = format!("{profile}_");
+            if let Some(level) = suffix.strip_prefix(&prefix) {
+                if level.starts_with("auto_aac-safe_") {
+                    return Some((normalize_project_title(base), profile.to_string()));
+                }
+                let level = level.strip_prefix("actual_").or_else(|| level.strip_prefix("target-"));
+                if let Some(level) = level {
+                    if let Some(auto_at) = level.find("lufs_auto") {
+                        let remainder = level[auto_at + "lufs_auto".len()..].trim_end_matches("_aac-safe");
+                        if remainder.is_empty()
+                            || (remainder.starts_with('_')
+                                && remainder[1..].chars().all(|character| character.is_ascii_digit()))
+                        {
+                            return Some((normalize_project_title(base), profile.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        if suffix.contains("db_bass-")
+            && (suffix.ends_with("_auto") || suffix.ends_with("_auto_2"))
+        {
+            return Some((normalize_project_title(base), "Auto ancien".into()));
+        }
+    }
+    if let Some(marker) = lower.rfind("_mastered_") {
+        let base = &stem[..marker];
+        let suffix = &lower[marker + "_mastered_".len()..];
+        if suffix.contains("db_i") && (suffix.ends_with("_bass-on") || suffix.ends_with("_bass-off")) {
+            return Some((normalize_project_title(base), "Manual".to_string()));
+        }
+    }
+    None
+}
+
+fn audio_extension(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    ["wav", "flac", "mp3", "m4a"]
+        .contains(&extension.as_str())
+        .then_some(extension)
+}
+
+#[tauri::command]
+async fn scan_audio_folder(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    root: String,
+) -> Result<LibraryScan, String> {
+    state.library_scan_cancel.store(false, Ordering::SeqCst);
+    let cancel = state.library_scan_cancel.clone();
+    let library_root = state.library_root.clone();
+    tauri::async_runtime::spawn_blocking(move || scan_audio_folder_worker(app, root, cancel, library_root))
+        .await
+        .map_err(|_| "The local folder scan stopped unexpectedly.")?
+}
+
+fn scan_audio_folder_worker(
+    app: tauri::AppHandle,
+    root: String,
+    cancel: Arc<AtomicBool>,
+    library_root: Arc<Mutex<Option<PathBuf>>>,
+) -> Result<LibraryScan, String> {
+    let root = PathBuf::from(root)
+        .canonicalize()
+        .map_err(|_| "The selected folder could not be opened.")?;
+    if !root.is_dir() {
+        return Err("Choose a folder to scan for local audio projects.".into());
+    }
+    let mut pending = vec![root.clone()];
+    let mut files = Vec::new();
+    let mut errors = Vec::new();
+    let mut scanned_entries = 0usize;
+    let mut canceled = false;
+    let mut project_sources = std::collections::HashSet::new();
+
+    while let Some(folder) = pending.pop() {
+        if cancel.load(Ordering::SeqCst) {
+            canceled = true;
+            break;
+        }
+        let entries = match fs::read_dir(&folder) {
+            Ok(entries) => entries,
+            Err(_) => {
+                if errors.len() < 100 {
+                    errors.push(format!("Could not read folder: {}", folder.display()));
+                }
+                continue;
+            }
+        };
+        for entry in entries {
+            if cancel.load(Ordering::SeqCst) {
+                canceled = true;
+                break;
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    if errors.len() < 100 { errors.push("A folder entry could not be read.".into()); }
+                    continue;
+                }
+            };
+            scanned_entries += 1;
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() { continue; }
+            if file_type.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            if !file_type.is_file() { continue; }
+            let path = entry.path();
+            let Some(extension) = audio_extension(&path) else { continue; };
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    if errors.len() < 100 { errors.push(format!("Could not read file metadata: {}", path.display())); }
+                    continue;
+                }
+            };
+            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else { continue; };
+            let (project_hint, kind, profile) = match lyte_render_hint(stem) {
+                Some((base, profile)) => {
+                    let parent = path.parent().unwrap_or(&root).strip_prefix(&root).unwrap_or(Path::new(""));
+                    project_sources.insert((parent.to_string_lossy().to_ascii_lowercase(), base.to_ascii_lowercase()));
+                    (Some(base), "master".to_string(), Some(profile))
+                }
+                None => (None, "unclassified".to_string(), None),
+            };
+            let modified_at_ms = metadata.modified().ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64);
+            let relative_path = path.strip_prefix(&root).unwrap_or(&path).to_string_lossy().into_owned();
+            files.push(LibraryFile {
+                path: path.to_string_lossy().into_owned(),
+                relative_path,
+                name,
+                extension: extension.to_ascii_uppercase(),
+                project_hint,
+                kind,
+                profile,
+                bytes: metadata.len(),
+                modified_at_ms,
+            });
+            if scanned_entries % 64 == 0 {
+                let _ = app.emit("library-scan-progress", LibraryScanProgress {
+                    scanned_entries,
+                    audio_files: files.len(),
+                });
+            }
+        }
+        if canceled { break; }
+    }
+
+    for file in &mut files {
+        if file.kind != "unclassified" { continue; }
+        let path = Path::new(&file.path);
+        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else { continue; };
+        let parent = path.parent().unwrap_or(&root).strip_prefix(&root).unwrap_or(Path::new(""));
+        let normalized = normalize_project_title(stem);
+        let key = (parent.to_string_lossy().to_ascii_lowercase(), normalized.to_ascii_lowercase());
+        if project_sources.contains(&key) {
+            file.project_hint = Some(normalized);
+            file.kind = "source".into();
+        }
+    }
+    files.sort_by(|left, right| right.modified_at_ms.cmp(&left.modified_at_ms));
+    let _ = app.emit("library-scan-progress", LibraryScanProgress {
+        scanned_entries,
+        audio_files: files.len(),
+    });
+    *library_root.lock().map_err(|_| "Could not store the selected library folder.")? = Some(root.clone());
+    Ok(LibraryScan {
+        root: root.to_string_lossy().into_owned(),
+        files,
+        scanned_entries,
+        errors,
+        canceled,
+    })
+}
+
+#[tauri::command]
+fn cancel_library_scan(state: tauri::State<'_, AppState>) {
+    state.library_scan_cancel.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+async fn analyze_comparison_track(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<ComparisonTrack, String> {
+    let root = state.library_root.lock()
+        .map_err(|_| "Could not access the selected library folder.")?
+        .clone()
+        .ok_or("Choose and scan a local folder first.")?;
+    let previews = state.comparison_previews.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(&path)
+            .canonicalize()
+            .map_err(|_| "This local audio file could not be opened.")?;
+        if !path.starts_with(&root) {
+            return Err("The audio file is outside the selected library folder.".into());
+        }
+        let path = audio_path(&path.to_string_lossy())?;
+        app.asset_protocol_scope().allow_file(&path)
+            .map_err(|_| "LYTE could not authorize this selected local audio file for playback.")?;
+        let track = inspect_track(path.to_string_lossy().into_owned())?;
+        let waveform = inspect_waveform(app.clone(), track.path.clone())?;
+        let measurements = measure_export(&app, &path)?;
+        let ffmpeg = executable(&crate::root(&app)?, "ffmpeg.exe", true)
+            .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
+        let (preview, playback_path) = prepare_comparison_playback(&ffmpeg, &path)?;
+        previews.lock()
+            .map_err(|_| "Could not retain the comparison playback file.")?
+            .insert(path, preview);
+        Ok(ComparisonTrack { track, waveform, measurements, playback_path: playback_path.to_string_lossy().into_owned() })
+    })
+    .await
+    .map_err(|_| "The local audio analysis stopped unexpectedly.")?
+}
+
+// Decode through the same FFmpeg used for analysis. WebView2 does not support
+// every WAV encoding (notably float64), even when the measurements succeed.
+fn prepare_comparison_playback(ffmpeg: &Path, source: &Path) -> Result<(tempfile::TempDir, PathBuf), String> {
+    let folder = std::env::temp_dir().join("lyte-mastering");
+    fs::create_dir_all(&folder).map_err(|_| "Could not create the temporary comparison folder.")?;
+    let preview = tempfile::Builder::new().prefix("comparison-").tempdir_in(folder)
+        .map_err(|_| "Could not create the temporary comparison playback file.")?;
+    let output = preview.path().join("playback.wav");
+    ffmpeg_log(ffmpeg, &[
+        "-i".into(), source.to_string_lossy().into_owned(),
+        "-map".into(), "0:a:0".into(), "-vn".into(),
+        "-c:a".into(), "pcm_f32le".into(), output.to_string_lossy().into_owned(),
+    ])?;
+    Ok((preview, output))
+}
+#[tauri::command]
+fn revoke_comparison_track(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    path: String,
+) {
+    if let Ok(root) = state.library_root.lock() {
+        if let Some(root) = root.as_ref() {
+            let path = PathBuf::from(path);
+            if path.starts_with(root) {
+                if let Ok(mut previews) = state.comparison_previews.lock() { previews.remove(&path); }
+                let _ = app.asset_protocol_scope().forbid_file(path);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn inspect_waveform(app: tauri::AppHandle, path: String) -> Result<Waveform, String> {
     const SAMPLE_RATE: usize = 4_000;
@@ -438,35 +773,15 @@ fn measure_window(app: &tauri::AppHandle, path: &Path, segment: Option<&Segment>
 fn measure(app: &tauri::AppHandle, path: &Path) -> Result<Measurements, String> {
     measure_window(app, path, None)
 }
-fn aac_true_peak(app: &tauri::AppHandle, path: &Path) -> Result<f64, String> {
+fn aac_decode_true_peak(app: &tauri::AppHandle, encoded_path: &Path) -> Result<f64, String> {
     let ffmpeg = executable(&root(app)?, "ffmpeg.exe", true)
         .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
-    let encoded = tempfile::Builder::new()
-        .prefix("lyte-codec-")
-        .suffix(".m4a")
-        .tempfile()
-        .map_err(|_| "Cannot create the temporary AAC verification file.")?
-        .into_temp_path();
-    let encoded_name = encoded.to_string_lossy().into_owned();
-    ffmpeg_log(
-        &ffmpeg,
-        &[
-            "-y".into(),
-            "-i".into(),
-            path.to_string_lossy().into(),
-            "-c:a".into(),
-            "aac".into(),
-            "-b:a".into(),
-            "256k".into(),
-            encoded_name.clone(),
-        ],
-    )?;
     let log = ffmpeg_log(
         &ffmpeg,
         &[
             "-hide_banner".into(),
             "-i".into(),
-            encoded_name,
+            encoded_path.to_string_lossy().into(),
             "-filter:a".into(),
             "ebur128=peak=true".into(),
             "-f".into(),
@@ -475,6 +790,28 @@ fn aac_true_peak(app: &tauri::AppHandle, path: &Path) -> Result<f64, String> {
         ],
     )?;
     metric(&log, "Peak:").ok_or("Could not measure true peak after AAC encoding.".into())
+}
+fn encode_aac(app: &tauri::AppHandle, source: &Path, output: &Path, gain_db: f64) -> Result<(), String> {
+    let ffmpeg = executable(&root(app)?, "ffmpeg.exe", true)
+        .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
+    let mut args = vec!["-y".into(), "-i".into(), source.to_string_lossy().into()];
+    if gain_db.abs() > 0.001 {
+        args.extend(["-af".into(), format!("volume={gain_db:.3}dB")]);
+    }
+    args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(), "-movflags".into(), "+faststart".into(), output.to_string_lossy().into()]);
+    ffmpeg_log(&ffmpeg, &args)?;
+    Ok(())
+}
+fn aac_true_peak(app: &tauri::AppHandle, path: &Path) -> Result<f64, String> {
+    let encoded = tempfile::Builder::new()
+        .prefix("lyte-codec-")
+        .suffix(".m4a")
+        .tempfile()
+        .map_err(|_| "Cannot create the temporary AAC verification file.")?
+        .into_temp_path();
+    encode_aac(app, path, &encoded, 0.0)?;
+    // This measures an actual 256 kb/s encode/decode. It is encoder-specific.
+    aac_decode_true_peak(app, &encoded)
 }
 fn measure_export(app: &tauri::AppHandle, path: &Path) -> Result<Measurements, String> {
     let mut measurements = measure(app, path)?;
@@ -681,13 +1018,26 @@ fn diagnose_variant(source: &Measurements, variant: &mut AutoVariant, profile: A
         diagnostics.push(format!("Sustained 30–150 Hz energy moved {:+.1} dB ({} profile budget: ±{:.1} dB).", variant.bass_change_db, profile.label, profile.bass_budget_db));
     }
     if variant.aac_risk {
-        diagnostics.push("AAC simulation reaches above 0 dBTP; use caution for lossy delivery.".into());
+        diagnostics.push(format!(
+            "AAC 256 kb/s encode/decode check reaches {:+.1} dBTP (above 0 dBTP); do not treat this WAV as AAC-ready.",
+            variant.measurements.aac_true_peak_dbtp.unwrap_or(f64::NAN)
+        ));
     }
     if diagnostics.is_empty() {
         diagnostics.push("Target, low-end movement and impact remain within this profile’s stated trade-offs.".into());
     }
     variant.reference_similarity = reference.map(|reference| reference_similarity(&variant.segment_measurements, reference));
     variant.diagnostics = diagnostics;
+}
+fn delivery_ready(variant: &AutoVariant, profile: AutoProfile) -> bool {
+    variant.peak_factor_loss_db <= profile.crest_budget_db
+        && variant.bass_change_db.abs() <= profile.bass_budget_db
+}
+fn delivery_ready_for(variant: &AutoVariant) -> bool {
+    AUTO_PROFILES.iter().copied()
+        .find(|profile| profile.id == variant.profile_id)
+        .map(|profile| delivery_ready(variant, profile))
+        .unwrap_or(false)
 }
 fn render_profile_attempt(
     app: &tauri::AppHandle,
@@ -733,6 +1083,7 @@ fn render_profile_attempt(
     calibrate_final_level(&ffmpeg, &shaped_path, &final_path, target_lufs, || {
         app.state::<AppState>().cancel_requested.load(Ordering::SeqCst)
     })?;
+    // AAC is measured for disclosure only; it never changes the PCM master.
     let measurements = measure_export(app, &final_path)?;
     let segment_measurements = measure_window(app, &final_path, Some(segment))?;
     let _ = fs::remove_file(raw_path);
@@ -942,25 +1293,44 @@ async fn start_auto_mastering(
         let local_reference = folder.join("reference.wav");
         pcm24_segment(&worker, &reference_input, &local_reference, &reference_selection)?;
         let reference_measurements = measure(&worker, &local_reference)?;
+        // The selected reference is the artistic loudness ceiling. The UI target
+        // may only request a quieter result; it cannot force Auto above reference.
+        let reference_target = reference_measurements.integrated_lufs.clamp(AUTO_TARGET_MIN_LUFS, AUTO_TARGET_MAX_LUFS);
+        let automatic_target = reference_target.min(options.target_lufs);
         let mut variants = Vec::new();
         for profile in AUTO_PROFILES {
-            let mut variant = calibrate_profile(&worker, &source, &folder, profile, options.target_lufs, &options.source_segment)?;
+            let mut variant = calibrate_profile(&worker, &source, &folder, profile, automatic_target, &options.source_segment)?;
             diagnose_variant(&source_measurements, &mut variant, profile, Some(&reference_measurements));
             variants.push(variant);
         }
+        let is_delivery_ready = variants.iter().any(delivery_ready_for);
         let selected = variants
             .iter()
             .max_by(|left, right| {
-                left.reference_similarity
-                    .unwrap_or(0)
-                    .cmp(&right.reference_similarity.unwrap_or(0))
+                delivery_ready_for(left)
+                    .cmp(&delivery_ready_for(right))
+                    .then_with(|| (left.profile_id == "dense").cmp(&(right.profile_id == "dense")))
                     .then_with(|| right.achieved_delta_lu.abs().total_cmp(&left.achieved_delta_lu.abs()))
+                    .then_with(|| {
+                        left.reference_similarity
+                            .unwrap_or(0)
+                            .cmp(&right.reference_similarity.unwrap_or(0))
+                            .then_with(|| right.achieved_delta_lu.abs().total_cmp(&left.achieved_delta_lu.abs()))
+                    })
             })
             .ok_or("The Auto profiles did not produce a master.")?;
-        let recommended_id = selected.id.clone();
+        let recommended_id = if is_delivery_ready {
+            selected.id.clone()
+        } else {
+            String::new()
+        };
         let similarity = selected.reference_similarity.unwrap_or(0);
         let reference_kind = if using_default_reference { "built-in" } else { "selected" };
-        let recommendation = format!("{} is closest to the {reference_kind} reference passage ({similarity}/100 measured similarity) while landing at {:+.1} LU from the requested target.", selected.profile_label, selected.achieved_delta_lu);
+        let recommendation = if is_delivery_ready {
+            format!("{} is the recommended listening candidate: it best balances the target, impact and low-end limits, with a {similarity}/100 measured similarity to the {reference_kind} reference. AAC is reported separately and does not attenuate this WAV master.", selected.profile_label)
+        } else {
+            format!("No profile meets the target, impact and low-end budgets. {} is the least risky listening candidate; AAC remains a separate delivery warning. Consider lowering the target or revisiting the source mix.", selected.profile_label)
+        };
         *worker
             .state::<AppState>()
             .session
@@ -976,13 +1346,14 @@ async fn start_auto_mastering(
             source_path: source.to_string_lossy().into(),
             source: source_measurements,
             source_segment,
-            target_lufs: options.target_lufs,
+            target_lufs: automatic_target,
             reference_path: Some(local_reference.to_string_lossy().into()),
             reference_segment: Some(reference_measurements),
             reference_start_seconds: Some(reference_selection.start_seconds),
             using_default_reference,
             variants,
             recommended_id,
+            delivery_ready: is_delivery_ready,
             recommendation,
         })
     })
@@ -998,6 +1369,20 @@ fn cancel_mastering(app: tauri::AppHandle) -> Result<(), String> {
         .store(true, Ordering::SeqCst);
     Ok(())
 }
+fn auto_export_filename(stem: &str, profile: &str, measured_lufs: f64, number: usize) -> String {
+    let suffix = if number > 1 {
+        format!("_{number}")
+    } else {
+        String::new()
+    };
+    format!(
+        "{stem}_hard-techno_{profile}_actual_{measured_lufs:.1}LUFS_auto{suffix}.wav"
+    )
+}
+fn auto_aac_export_filename(stem: &str, profile: &str, measured_lufs: f64, number: usize) -> String {
+    auto_export_filename(stem, profile, measured_lufs, number).replace(".wav", "_AAC-safe.m4a")
+}
+
 #[tauri::command]
 fn export_auto_master(
     app: tauri::AppHandle,
@@ -1024,15 +1409,13 @@ fn export_auto_master(
     }
     let profile = &variant.profile_id;
     let mut number = 1;
-    let mut destination = session.export_folder.join(format!(
-        "{}_hard-techno_{}_target-{:.1}LUFS_auto.wav",
-        session.export_stem, profile, variant.target_lufs
+    let mut destination = session.export_folder.join(auto_export_filename(
+        &session.export_stem, profile, variant.measurements.integrated_lufs, number,
     ));
     while destination.exists() {
         number += 1;
-        destination = session.export_folder.join(format!(
-            "{}_hard-techno_{}_target-{:.1}LUFS_auto_{number}.wav",
-            session.export_stem, profile, variant.target_lufs
+        destination = session.export_folder.join(auto_export_filename(
+            &session.export_stem, profile, variant.measurements.integrated_lufs, number,
         ));
     }
     fs::copy(source, &destination).map_err(|_| "Cannot export the selected master.".to_string())?;
@@ -1040,6 +1423,48 @@ fn export_auto_master(
         .output
         .lock()
         .map_err(|_| "Cannot record the output folder.")? = Some(destination.clone());
+    Ok(destination.to_string_lossy().into())
+}
+#[tauri::command]
+async fn export_auto_aac_safe(app: tauri::AppHandle, session_id: String, variant_id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || export_auto_aac_safe_worker(app, session_id, variant_id))
+        .await
+        .map_err(|_| "AAC export stopped unexpectedly.".to_string())?
+}
+fn export_auto_aac_safe_worker(app: tauri::AppHandle, session_id: String, variant_id: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let session = state.session.lock().map_err(|_| "Cannot access the mastering session.")?;
+    let session = session.as_ref().filter(|s| s.id == session_id)
+        .ok_or("This mastering session is no longer available.")?;
+    let variant = session.variants.iter().find(|variant| variant.id == variant_id)
+        .ok_or("Unknown master variant.")?;
+    let source = PathBuf::from(&variant.path);
+    if !source.is_file() { return Err("The selected master is no longer available.".into()); }
+    let work = tempfile::tempdir().map_err(|_| "Cannot create AAC export workspace.")?;
+    let candidate = work.path().join("delivery.m4a");
+    let mut gain_db = 0.0;
+    let mut verified = false;
+    for _ in 0..AAC_EXPORT_MAX_ATTEMPTS {
+        encode_aac(&app, &source, &candidate, gain_db)?;
+        let peak = aac_decode_true_peak(&app, &candidate)?;
+        if peak <= AAC_DELIVERY_CEILING { verified = true; break; }
+        // Only the optional AAC delivery encode is attenuated; the WAV is untouched.
+        gain_db += AAC_DELIVERY_CEILING - peak - 0.1;
+    }
+    if !verified { return Err("Could not verify an AAC export below the -0.1 dBTP delivery ceiling. The WAV master is unchanged.".into()); }
+    let profile = &variant.profile_id;
+    let mut number = 1;
+    let mut destination = session.export_folder.join(auto_aac_export_filename(
+        &session.export_stem, profile, variant.measurements.integrated_lufs, number,
+    ));
+    while destination.exists() {
+        number += 1;
+        destination = session.export_folder.join(auto_aac_export_filename(
+            &session.export_stem, profile, variant.measurements.integrated_lufs, number,
+        ));
+    }
+    fs::copy(&candidate, &destination).map_err(|_| "Cannot export the verified AAC delivery file.")?;
+    *app.state::<AppState>().output.lock().map_err(|_| "Cannot record the output folder.")? = Some(destination.clone());
     Ok(destination.to_string_lossy().into())
 }
 #[tauri::command]
@@ -1109,10 +1534,15 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             inspect_track,
             inspect_waveform,
+            scan_audio_folder,
+            cancel_library_scan,
+            analyze_comparison_track,
+            revoke_comparison_track,
             start_mastering,
             start_auto_mastering,
             cancel_mastering,
             export_auto_master,
+            export_auto_aac_safe,
             open_output_folder,
             open_help_link
         ])
@@ -1131,6 +1561,26 @@ mod tests {
     use super::*;
     fn test_ffmpeg() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../bin/ffmpeg.exe")
+    }
+    #[test]
+    fn comparison_preview_decodes_float64_and_cleans_up() {
+        let work = tempfile::tempdir().unwrap();
+        let source = work.path().join("source.wav");
+        let ffmpeg = test_ffmpeg();
+        ffmpeg_log(&ffmpeg, &[
+            "-f".into(), "lavfi".into(), "-i".into(), "sine=frequency=440:duration=2:sample_rate=48000".into(),
+            "-c:a".into(), "pcm_f64le".into(), source.to_string_lossy().into_owned(),
+        ]).unwrap();
+        let original = fs::read(&source).unwrap();
+        let (preview, output) = prepare_comparison_playback(&ffmpeg, &source).unwrap();
+        let (source_lufs, source_peak, source_rate) = delivery_probe(&ffmpeg, &source).unwrap();
+        let (preview_lufs, preview_peak, preview_rate) = delivery_probe(&ffmpeg, &output).unwrap();
+        assert!((source_lufs - preview_lufs).abs() <= 0.1);
+        assert!((source_peak - preview_peak).abs() <= 0.1);
+        assert_eq!(source_rate, preview_rate);
+        assert_eq!(fs::read(&source).unwrap(), original);
+        drop(preview);
+        assert!(!output.exists());
     }
     #[test]
     fn crossover_preserves_energy_at_the_split() {
@@ -1285,7 +1735,7 @@ mod tests {
         );
     }
     #[test]
-    fn diagnoses_aac_risk_without_rejecting_an_aggressive_profile() {
+    fn aac_risk_warns_but_does_not_disqualify_the_wav_master() {
         let source = Measurements {
             integrated_lufs: -8.0,
             true_peak_dbtp: -1.0,
@@ -1321,7 +1771,17 @@ mod tests {
         };
         diagnose_variant(&source, &mut variant, AUTO_PROFILES[2], None);
         assert!(variant.aac_risk);
-        assert!(variant.diagnostics.iter().any(|note| note.contains("AAC simulation")));
+        assert!(delivery_ready_for(&variant));
+        assert!(variant.diagnostics.iter().any(|note| note.contains("AAC 256 kb/s encode/decode check")));
+    }
+
+    #[test]
+    fn aac_safe_filename_is_distinct_from_the_wav_master() {
+        let wav = auto_export_filename("track", "dense", -5.4, 1);
+        let aac = auto_aac_export_filename("track", "dense", -5.4, 1);
+        assert!(wav.ends_with(".wav"));
+        assert!(aac.ends_with("_AAC-safe.m4a"));
+        assert_ne!(wav, aac);
     }
 
     #[test]
@@ -1333,6 +1793,46 @@ mod tests {
         assert_eq!(close, 100);
         assert_eq!(loudness_matched, 100);
         assert!(far < close);
+    }
+
+    #[test]
+    fn auto_export_filename_uses_the_measured_delivery_level() {
+        assert_eq!(
+            auto_export_filename("PSYCHEDELICS", "faithful", -8.8, 1),
+            "PSYCHEDELICS_hard-techno_faithful_actual_-8.8LUFS_auto.wav"
+        );
+        assert_eq!(
+            auto_export_filename("PSYCHEDELICS", "faithful", -8.8, 2),
+            "PSYCHEDELICS_hard-techno_faithful_actual_-8.8LUFS_auto_2.wav"
+        );
+    }
+
+    #[test]
+    fn recognizes_only_current_lyte_master_filename_patterns() {
+        assert_eq!(
+            lyte_render_hint("PSYCHEDELICS_hard-techno_faithful_actual_-8.8LUFS_auto_2"),
+            Some(("PSYCHEDELICS".into(), "faithful".into()))
+        );
+        assert_eq!(
+            lyte_render_hint("PSYCHEDELICS_hard-techno_dense_target--5.0LUFS_auto"),
+            Some(("PSYCHEDELICS".into(), "dense".into()))
+        );
+        assert_eq!(
+            lyte_render_hint("PSYCHEDELICS (240926-1920)_hard-techno_faithful_auto_aac-safe_-8LUFS"),
+            Some(("PSYCHEDELICS".into(), "faithful".into()))
+        );
+        assert_eq!(
+            lyte_render_hint("PSYCHEDELICS 170926-2251_hard-techno_-4.0dB_bass-off_auto"),
+            Some(("PSYCHEDELICS".into(), "Auto ancien".into()))
+        );
+        assert_eq!(normalize_project_title("PSYCHEDELICS (240926-1920)"), "PSYCHEDELICS");
+        assert_eq!(normalize_project_title("PSYCHEDELICS 180926-1158"), "PSYCHEDELICS");
+        assert_eq!(
+            lyte_render_hint("Song_mastered_-5.0dB_i0.65_bass-on"),
+            Some(("Song".into(), "Manual".into()))
+        );
+        assert_eq!(lyte_render_hint("Song_final_master"), None);
+        assert_eq!(lyte_render_hint("Song_hard-techno_faithful_target_-5LUFS_auto"), None);
     }
 
     #[test]
