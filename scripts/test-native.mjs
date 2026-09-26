@@ -19,7 +19,7 @@ if (process.env.LYTE_TEST_SOURCE) {
 const stdout = fs.openSync(path.join(work, 'app-stdout.log'), 'w');
 const stderr = fs.openSync(path.join(work, 'app-stderr.log'), 'w');
 // Temporary WebView2 debugging endpoint for this test only. No app HTTP backend.
-const app = spawn(appPath, [], { cwd: path.dirname(appPath), windowsHide: true, env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9237' }, stdio: ['ignore', stdout, stderr] });
+const app = spawn(appPath, [], { cwd: path.dirname(appPath), windowsHide: true, env: { ...process.env, WEBVIEW2_USER_DATA_FOLDER: path.join(work, 'webview'), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=9237' }, stdio: ['ignore', stdout, stderr] });
 let browser;
 try {
   for (let attempt = 0; attempt < 45; attempt++) {
@@ -74,15 +74,33 @@ try {
     await page.locator('#auto-target').fill('-5');
     const autoStart = Date.now();
     await page.getByRole('button', { name: 'RENDER 3 PROFILES' }).click();
-    await page.waitForFunction(() => document.body.innerText.includes('Three profiles ready') || document.querySelector('[role=alert]'), null, { timeout: 600000 });
+    await page.waitForFunction(() => document.querySelectorAll('.deck').length === 3 || document.querySelector('[role=alert]'), null, { timeout: 600000 });
     const autoError = await page.getByRole('alert').allTextContents();
     if (autoError.length) throw new Error(autoError.join('\n'));
-    const profiles = await page.locator('.variant').count();
+    const profiles = await page.locator('.deck').count();
     if (profiles !== 3) throw new Error(`Expected three Auto profiles, received ${profiles}`);
+    await page.getByRole('heading', { name: 'Écoute tes trois rendus Hard Techno.' }).waitFor();
+    await page.waitForFunction(() => [...document.querySelectorAll('.deck audio')].every(audio => audio.readyState >= 2), null, { timeout: 30000 });
+    await page.getByRole('button', { name: 'Lecture', exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('.deck audio')].every(audio => !audio.paused && audio.currentTime > 0));
+    await page.locator('.deck input[type=radio]').last().check();
+    await page.waitForTimeout(200);
+    if (!await page.locator('.deck audio').evaluateAll(audios => audios.every(audio => !audio.paused && audio.currentTime > 0))) throw new Error('Auto playback stopped on switching');
+    const selectedName = await page.locator('.deck.selected .deck-heading strong').innerText();
+    const previews = await page.locator('.deck audio').evaluateAll(audios => audios.map(audio => decodeURIComponent(new URL(audio.src).pathname.slice(1))));
+    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await page.screenshot({ path: path.join(work, 'auto-comparison.png'), fullPage: true });
+    await page.getByRole('button', { name: 'Exporter ce rendu WAV' }).click();
+    await page.getByRole('button', { name: '✓ Master exporté' }).waitFor();
+    const exported = fs.readdirSync(work).filter(name => name.includes('_hard-techno_') && name.endsWith('_auto.wav'));
+    if (exported.length !== 1) throw new Error('Expected one chosen Auto export');
+    execFileSync(ffmpeg, ['-v', 'error', '-i', path.join(work, exported[0]), '-f', 'null', '-'], { windowsHide: true });
+    await page.getByRole('button', { name: 'Retour au mastering' }).click();
     await page.getByText('Hard Techno reference', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Export selected master' }).click();
-    await page.getByText(/Master exported/).waitFor();
-    auto = { profiles, seconds: (Date.now() - autoStart) / 1000, targetLufs: -5 };
+    await page.waitForFunction(() => document.querySelectorAll('.deck').length === 0);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    if (previews.some(preview => fs.existsSync(preview))) throw new Error('Auto listening copies were not cleaned up');
+    auto = { profiles, seconds: (Date.now() - autoStart) / 1000, targetLufs: -5, playback: true, selectedName, exported: exported[0], previewCleanup: true };
   }
   const report = { app: appPath, input: fixture, output, seconds: (Date.now() - start) / 1000, progressCount: progress.length, progressMin: Math.min(...progress), progressMax: Math.max(...progress), bytes: fs.statSync(output).size, noOverwrite: true, auto };
   fs.writeFileSync(path.join(work, 'report.json'), JSON.stringify(report, null, 2));

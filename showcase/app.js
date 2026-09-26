@@ -1,5 +1,5 @@
 const repository = "MLyte/LYTE-Mastering";
-const fallback = "https://github.com/MLyte/LYTE-Mastering/releases/download/v0.3.0-beta.2/LYTE.Mastering_0.3.0-beta.2_x64-setup.exe";
+const fallback = "https://github.com/MLyte/LYTE-Mastering/releases/download/v0.3.0-beta.3/LYTE.Mastering_0.3.0-beta.3_x64-setup.exe";
 const status = document.querySelector("[data-download-status]");
 const version = document.querySelector("[data-release-version]");
 const date = document.querySelector("[data-release-date]");
@@ -46,7 +46,7 @@ async function loadRelease() {
     status.textContent = installer ? `${installer.name} · ${copy.direct}` : copy.choose;
   } catch (error) {
     setDownload(fallback);
-    version.textContent = `LYTE Mastering v0.3.0-beta.2 · ${copy.beta}`;
+    version.textContent = `LYTE Mastering v0.3.0-beta.3 · ${copy.beta}`;
     date.textContent = copy.consult;
     status.textContent = copy.unavailable;
   }

@@ -42,6 +42,15 @@ const exporting = ref(false);
 const exportedVariantIds = ref<string[]>([]);
 const exportedAacVariantIds = ref<string[]>([]);
 const previewPlayer = ref<HTMLAudioElement | null>(null);
+const comparisonTracks = computed(() => auto.value?.variants.map(variant => ({
+  path: variant.path, relativePath: variant.path.split(/[\\/]/).pop() || variant.path,
+  name: `${track.value?.name || 'Hard Techno'} · ${variant.profileLabel}`,
+  extension: 'WAV', kind: 'master', profile: variant.profileId, bytes: 0, variantId: variant.id,
+})) || []);
+const comparisonSelectedPath = computed(() => auto.value?.variants.find(variant => variant.id === selected.value)?.path || '');
+const comparisonExportedPaths = computed(() => auto.value?.variants.filter(variant => exportedVariantIds.value.includes(variant.id)).map(variant => variant.path) || []);
+function selectComparisonTrack(path: string) { selected.value = auto.value?.variants.find(variant => variant.path === path)?.id || ''; }
+function exportComparisonTrack(path: string) { selectComparisonTrack(path); void exportSelected(); }
 const settings = reactive({ loudness: -9, intensity: 1, preserveBass: false, dynamicBass: true, softClipDb: 0.5 });
 const autoSettings = reactive({ targetLufs: -5, sourceStart: 0, sourceDuration: 30, referenceStart: 0, referenceDuration: 30 });
 const busy = computed(() => status.value === "Processing");
@@ -82,11 +91,12 @@ async function master() {
       manual.value = await invoke<MasterResult>("start_mastering", { options: { input: track.value.path, ...settings } }); output.value = manual.value.output;
     }
     progress.value = 100; status.value = "Succeeded"; completionSound();
+    if (auto.value) comparisonOpen.value = true;
   } catch (e) { fail(e); }
 }
 async function cancel() { try { await invoke("cancel_mastering"); } catch (e) { fail(e); } }
-async function exportSelected() { if (!auto.value || !selected.value || exporting.value || exportedVariantIds.value.includes(selected.value)) return; exporting.value = true; error.value = ""; try { output.value = await invoke<string>("export_auto_master", { sessionId: auto.value.sessionId, variantId: selected.value }); exportedVariantIds.value = [...exportedVariantIds.value, selected.value]; } catch (e) { fail(e); } finally { exporting.value = false; } }
-async function exportSelectedAac() { if (!auto.value || !selected.value || exporting.value || exportedAacVariantIds.value.includes(selected.value)) return; exporting.value = true; error.value = ""; try { output.value = await invoke<string>("export_auto_aac_safe", { sessionId: auto.value.sessionId, variantId: selected.value }); exportedAacVariantIds.value = [...exportedAacVariantIds.value, selected.value]; } catch (e) { fail(e); } finally { exporting.value = false; } }
+async function exportSelected() { if (!auto.value || !selected.value || exporting.value || exportedVariantIds.value.includes(selected.value)) return; const variantId = selected.value; exporting.value = true; error.value = ""; try { output.value = await invoke<string>("export_auto_master", { sessionId: auto.value.sessionId, variantId }); exportedVariantIds.value = [...exportedVariantIds.value, variantId]; } catch (e) { fail(e); } finally { exporting.value = false; } }
+async function exportSelectedAac() { if (!auto.value || !selected.value || exporting.value || exportedAacVariantIds.value.includes(selected.value)) return; const variantId = selected.value; exporting.value = true; error.value = ""; try { output.value = await invoke<string>("export_auto_aac_safe", { sessionId: auto.value.sessionId, variantId }); exportedAacVariantIds.value = [...exportedAacVariantIds.value, variantId]; } catch (e) { fail(e); } finally { exporting.value = false; } }
 async function openFolder() { try { await invoke("open_output_folder"); } catch (e) { fail(e); } }
 async function openHelpLink(project: "bakuage" | "phaselimiter") { try { await invoke("open_help_link", { project }); } catch (e) { fail(e); } }
 function preview(path: string, lufs: number, start = 0) {
@@ -211,5 +221,5 @@ onUnmounted(() => { cleanup.forEach(fn => fn()); resizeObserver?.disconnect(); p
     <div v-if="auto && selected" class="aac-export-options"><p>AAC 256 kb/s is a separate delivery copy. Any safety attenuation applies only to that encoded file; the WAV master above remains untouched.</p><button class="secondary" type="button" :disabled="exporting || exportedAacVariantIds.includes(selected)" @click="exportSelectedAac">{{ exporting ? 'Preparing AAC…' : exportedAacVariantIds.includes(selected) ? '✓ AAC delivery exported' : 'Export AAC-safe delivery (.m4a)' }}</button></div>
     <footer><span>PHASELIMITER ENGINE</span><span>Always on your computer.</span></footer>
   </main>
-  <AudioComparator v-else @close="comparisonOpen = false" @layout="scheduleWindowFit" />
+  <AudioComparator v-else :generated-tracks="comparisonTracks" :session-id="auto?.sessionId" :selected-path="comparisonSelectedPath" :start-seconds="autoSettings.sourceStart" :exported-paths="comparisonExportedPaths" :exporting="exporting" :export-output="output" :export-error="error" @select="selectComparisonTrack" @export="exportComparisonTrack" @open-folder="openFolder" @close="comparisonOpen = false" @layout="scheduleWindowFit" />
 </template>

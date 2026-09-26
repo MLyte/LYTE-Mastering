@@ -8,7 +8,7 @@ Cette vitrine est un site statique autonome, prévu pour `mastering.mathieuluyte
 2. Déployer ce dossier tel quel (sans étape Node.js).
 3. Vérifier que `https://mastering.mathieuluyten.be` est servi en HTTPS.
 
-Le script `app.js` demande la dernière release publique de `MLyte/LYTE-Mastering` à l’API GitHub. S’il trouve un asset `.exe`, les boutons téléchargent cet installateur directement ; sinon ils ouvrent la dernière release. La version détectée prend le relais du lien direct vers la bêta 0.3.0-beta.2, conservé dans les pages et utilisé si la vérification GitHub échoue.
+Le script `app.js` demande la dernière release publique de `MLyte/LYTE-Mastering` à l’API GitHub. S’il trouve un asset `.exe`, les boutons téléchargent cet installateur directement ; sinon ils ouvrent la dernière release. La version détectée prend le relais du lien direct vers la bêta 0.3.0-beta.3, conservé dans les pages et utilisé si la vérification GitHub échoue.
 
 À noter : les polices sont chargées depuis Google Fonts. Pour une vitrine entièrement sans requête tierce, les auto-héberger avant la mise en production.
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LYTE Mastering",
-  "version": "0.3.0-beta.2",
+  "version": "0.3.0-beta.3",
   "identifier": "be.lyte.mastering",
   "build": {
     "beforeDevCommand": {
@@ -14,7 +14,7 @@
   "app": {
     "windows": [
       {
-        "title": "LYTE Mastering v0.3.0-beta.2 · build 16:54",
+        "title": "LYTE Mastering v0.3.0-beta.3 · build 18:58",
         "width": 800,
         "height": 900,
         "maximized": true,

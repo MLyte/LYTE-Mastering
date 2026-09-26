@@ -17,7 +17,7 @@ window.testCalls=[]; window.dialogCalls=0; window.completionDings=0;
 window.testMeasurement=(lufs=-5)=>({integratedLufs:lufs,truePeakDbtp:-1,peakFactorDb:6,bassRatioDb:-5,bandEnergyDb:[-6,-9,-12,-18],aacTruePeakDbtp:-.2});
 window.testVariant=(id,label,lufs,similarity)=>({id,profileId:id,profileLabel:label,targetLufs:-5,engineReferenceDb:-5,achievedDeltaLu:lufs+5,attempts:2,path:'C:\\Temp\\'+id+'.wav',measurements:window.testMeasurement(lufs),segmentMeasurements:window.testMeasurement(lufs),preserveBass:id!=='aggressive',peakFactorLossDb:id==='aggressive'?4.2:1.2,bassChangeDb:id==='aggressive'?1.5:.2,aacRisk:id==='aggressive',diagnostics:[label+' diagnostic.'],referenceSimilarity:similarity});
 window.AudioContext=class { state='running'; currentTime=0; destination={}; createGain(){return {gain:{setValueAtTime(){},exponentialRampToValueAtTime(){}},connect(){}}}; createOscillator(){return {frequency:{setValueAtTime(){}},connect(){},start(){window.completionDings+=1},stop(){}}}; resume(){return Promise.resolve()}; close(){return Promise.resolve()} };
-mockWindows('main'); window.__TAURI_INTERNALS__.convertFileSrc=(path)=>'asset://localhost/'+encodeURIComponent(path); mockIPC((cmd,args)=>{ window.testCalls.push({cmd,args}); if(cmd==='plugin:dialog|open'){ window.dialogCalls++; return window.dialogCalls === 1 ? 'C:\\Audio\\track.wav' : 'C:\\Audio\\reference.wav'; } if(cmd==='scan_audio_folder') return {root:args.root,files:window.comparisonFiles,scannedEntries:32,errors:[],canceled:false}; if(cmd==='analyze_comparison_track') return window.comparisonAnalysis(args.path); if(cmd==='cancel_library_scan'||cmd==='revoke_comparison_track') return null; if(cmd==='inspect_track') return {path:args.path,name:args.path.includes('reference')?'reference.wav':'track.wav',extension:'WAV'}; if(cmd==='inspect_waveform') return {durationSeconds:180,peaks:Array.from({length:240},(_,i)=>.18+Math.abs(Math.sin(i*.31))*.82)}; if(cmd==='start_mastering') return new Promise((resolve,reject)=>{window.finishMaster=resolve;window.failMaster=reject}); if(cmd==='start_auto_mastering') return new Promise(resolve=>{window.finishAuto=resolve}); if(cmd==='export_auto_master') return 'C:\\Audio\\track_hard-techno_dense_target--5.0LUFS_auto.wav'; },{shouldMockEvents:true});
+mockWindows('main'); window.__TAURI_INTERNALS__.convertFileSrc=(path)=>'asset://localhost/'+encodeURIComponent(path); mockIPC((cmd,args)=>{ window.testCalls.push({cmd,args}); if(cmd==='plugin:dialog|open'){ window.dialogCalls++; return window.dialogCalls === 1 ? 'C:\\Audio\\track.wav' : 'C:\\Audio\\reference.wav'; } if(cmd==='scan_audio_folder') return {root:args.root,files:window.comparisonFiles,scannedEntries:32,errors:[],canceled:false}; if(cmd==='analyze_comparison_track') return window.comparisonAnalysis(args.path); if(cmd==='prepare_auto_comparison') return window.comparisonAnalysis('C:/Temp/'+args.variantId+'.wav'); if(cmd==='cancel_library_scan'||cmd==='revoke_comparison_track') return null; if(cmd==='inspect_track') return {path:args.path,name:args.path.includes('reference')?'reference.wav':'track.wav',extension:'WAV'}; if(cmd==='inspect_waveform') return {durationSeconds:180,peaks:Array.from({length:240},(_,i)=>.18+Math.abs(Math.sin(i*.31))*.82)}; if(cmd==='start_mastering') return new Promise((resolve,reject)=>{window.finishMaster=resolve;window.failMaster=reject}); if(cmd==='start_auto_mastering') return new Promise(resolve=>{window.finishAuto=resolve}); if(cmd==='export_auto_master' && window.deferExport) return new Promise(resolve => {window.finishExport=resolve}); if(cmd==='export_auto_master') return 'C:\\Audio\\track_hard-techno_dense_target--5.0LUFS_auto.wav'; },{shouldMockEvents:true});
 window.comparisonFiles=[
   {path:'C:\\Audio\\track.wav',relativePath:'track.wav',name:'track.wav',extension:'WAV',projectHint:'track',kind:'source',profile:null,bytes:1000,modifiedAtMs:1000},
   ...['faithful','dense','aggressive','faithful','dense'].map((profile,index)=>({path:'C:\\Audio\\track_hard-techno_'+profile+'_actual_-'+(6+index)+'.0LUFS_auto'+(index>2?'_'+(index-1):'')+'.wav',relativePath:'track_hard-techno_'+profile+'_actual_-'+(6+index)+'.0LUFS_auto'+(index>2?'_'+(index-1):'')+'.wav',name:'track_'+profile+'_'+index+'.wav',extension:'WAV',projectHint:'track',kind:'master',profile,bytes:1200,modifiedAtMs:10000-index*1000})),
@@ -120,6 +120,8 @@ test('Manual keeps the direct PhaseLimiter options', async ({ page }) => {
   expect(await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_mastering').args.options)).toEqual({input:'C:\\Audio\\track.wav',loudness:-8.5,intensity:1,preserveBass:false,dynamicBass:true,softClipDb:.5})
   await page.evaluate(() => window.finishMaster({output:'C:\\Audio\\master.wav',source:window.testMeasurement(-10),master:window.testMeasurement(-8)}))
   await expect(page.getByText(/Master complete/)).toBeVisible()
+  await expect(page.locator('.compare-shell')).toHaveCount(0)
+  expect(await page.evaluate(() => window.testCalls.some(call => call.cmd === 'prepare_auto_comparison'))).toBe(false)
 })
 
 test('Auto sends the explicit target and three profile result is exportable', async ({ page }) => {
@@ -143,6 +145,8 @@ test('Auto sends the explicit target and three profile result is exportable', as
   await page.evaluate(() => window.testEmit('mastering-progress', 100))
   await expect(page.getByRole('progressbar')).toHaveAttribute('value','22')
   await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:\\Temp\\source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-4.5,variants:[window.testVariant('faithful','Fidèle',-4.7),window.testVariant('dense','Dense',-4.5),window.testVariant('aggressive','Agressif',-4.4)],recommendedId:'dense',recommendation:'Dense is selected as the middle trade-off.'}))
+  await expect(page.locator('.deck')).toHaveCount(3)
+  await page.getByRole('button', { name:'Retour au mastering' }).click()
   await expect(page.getByText('Three profiles ready')).toBeVisible()
   await expect(page.locator('.variant')).toHaveCount(3)
   await expect(page.getByText('Dense diagnostic.')).toBeVisible()
@@ -163,6 +167,58 @@ test('Auto accepts an optional reference passage and shows its comparison', asyn
   const options = await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_auto_mastering').args.options)
   expect(options.reference).toEqual({input:'C:\\Audio\\reference.wav',segment:{startSeconds:30,durationSeconds:30}})
   await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:\\Temp\\source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-5,referencePath:'C:\\Temp\\reference.wav',referenceSegment:window.testMeasurement(-5),variants:[window.testVariant('faithful','Fidèle',-5,88),window.testVariant('dense','Dense',-5,91),window.testVariant('aggressive','Agressif',-5,82)],recommendedId:'dense',recommendation:'Dense is closest to the selected reference passage.'}))
+  await expect(page.locator('.deck')).toHaveCount(3)
+  await page.getByRole('button', { name:'Retour au mastering' }).click()
   await expect(page.getByText('Reference', { exact:true })).toBeVisible()
   await expect(page.getByText('Ref 91/100')).toBeVisible()
+})
+
+
+test('Auto opens three listening decks and exports the chosen variant before any folder scan', async ({ page }) => {
+  await mount(page)
+  await page.evaluate(() => {
+    window.testPlayCalls = 0
+    HTMLMediaElement.prototype.load = function () {}
+    HTMLMediaElement.prototype.play = function () { window.testPlayCalls += 1; return Promise.resolve() }
+    HTMLMediaElement.prototype.pause = function () {}
+  })
+  await page.getByRole('button', { name:/Drop a track/ }).click()
+  await page.getByRole('button', { name:/Auto/ }).click()
+  await page.getByRole('button', { name:'RENDER 3 PROFILES' }).click()
+  await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:/Temp/source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-5,variants:[window.testVariant('faithful','Fidèle',-5),window.testVariant('dense','Dense',-5),window.testVariant('aggressive','Agressif',-5)],recommendedId:'dense',recommendation:'Dense recommendation.'}))
+  await expect(page.locator('.deck')).toHaveCount(3)
+  await expect(page.getByRole('button', { name:'Lecture', exact:true })).toBeEnabled()
+  await expect(page.locator('.deck.selected')).toContainText('Dense')
+  expect(await page.evaluate(() => window.testCalls.filter(call => call.cmd === 'prepare_auto_comparison').map(call => call.args))).toEqual(['faithful','dense','aggressive'].map(variantId => ({sessionId:'session',variantId})))
+  expect(await page.evaluate(() => window.testCalls.some(call => call.cmd === 'scan_audio_folder'))).toBe(false)
+  await page.getByRole('button', { name:'Lecture', exact:true }).click()
+  expect(await page.evaluate(() => window.testPlayCalls)).toBe(3)
+  await page.locator('.deck').filter({ hasText:'Agressif' }).getByRole('radio').check()
+  await expect(page.getByRole('button', { name:'Pause', exact:true })).toBeEnabled()
+  await page.evaluate(() => { window.deferExport = true })
+  await page.getByRole('button', { name:'Exporter ce rendu WAV' }).click()
+  await page.locator('.deck').filter({ hasText:'Fidèle' }).getByRole('radio').check()
+  await page.evaluate(() => window.finishExport('C:/Audio/aggressive-export.wav'))
+  await expect(page.getByRole('button', { name:'Exporter ce rendu WAV' })).toBeEnabled()
+  await page.locator('.deck').filter({ hasText:'Agressif' }).getByRole('radio').check()
+  await expect(page.getByRole('button', { name:'✓ Master exporté' })).toBeDisabled()
+  expect(await page.evaluate(() => window.testCalls.find(call => call.cmd === 'export_auto_master').args)).toEqual({sessionId:'session',variantId:'aggressive'})
+  await page.getByRole('button', { name:'Retour au mastering' }).click()
+  await expect(page.locator('#variant-aggressive')).toBeChecked()
+  await expect.poll(() => page.evaluate(() => window.testCalls.filter(call => call.cmd === 'revoke_comparison_track').length)).toBe(3)
+})
+
+test('Auto preview failure keeps the render available for export', async ({ page }) => {
+  await mount(page)
+  await page.evaluate(() => { window.comparisonAnalysis = () => { throw new Error('Preview unavailable') } })
+  await page.getByRole('button', { name:/Drop a track/ }).click()
+  await page.getByRole('button', { name:/Auto/ }).click()
+  await page.getByRole('button', { name:'RENDER 3 PROFILES' }).click()
+  await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:/Temp/source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-5,variants:[window.testVariant('faithful','Fidèle',-5),window.testVariant('dense','Dense',-5),window.testVariant('aggressive','Agressif',-5)],recommendedId:'',recommendation:'No recommendation.'}))
+  await expect(page.getByRole('alert')).toContainText('Preview unavailable')
+  await page.getByRole('button', { name:'Retour au mastering' }).click()
+  await expect(page.getByText('Three profiles ready')).toBeVisible()
+  await expect(page.getByRole('button', { name:'Export selected master' })).toBeDisabled()
+  await page.locator('#variant-faithful').check()
+  await expect(page.getByRole('button', { name:'Export selected master' })).toBeEnabled()
 })

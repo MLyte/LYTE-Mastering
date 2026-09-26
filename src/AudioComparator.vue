@@ -4,14 +4,18 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
-type LibraryFile = { path: string; relativePath: string; name: string; extension: string; projectHint?: string | null; kind: string; profile?: string | null; bytes: number; modifiedAtMs?: number | null };
+type LibraryFile = { variantId?: string; path: string; relativePath: string; name: string; extension: string; projectHint?: string | null; kind: string; profile?: string | null; bytes: number; modifiedAtMs?: number | null };
 type LibraryScan = { root: string; files: LibraryFile[]; scannedEntries: number; errors: string[]; canceled: boolean };
 type ScanProgress = { scannedEntries: number; audioFiles: number };
 type Measurements = { integratedLufs: number; truePeakDbtp: number; peakFactorDb: number; bassRatioDb: number; aacTruePeakDbtp?: number | null };
 type Analysis = { playbackPath: string; track: { path: string; name: string; extension: string }; waveform: { durationSeconds: number; peaks: number[] }; measurements: Measurements };
 type Slot = { file: LibraryFile; analysis: Analysis };
 type Project = { id: string; title: string; files: LibraryFile[] };
-const emit = defineEmits<{ close: []; layout: [] }>();
+const props = withDefaults(defineProps<{ generatedTracks?: LibraryFile[]; sessionId?: string; selectedPath?: string; startSeconds?: number; exportedPaths?: string[]; exporting?: boolean; exportOutput?: string; exportError?: string }>(), { generatedTracks: () => [], exportedPaths: () => [], startSeconds: 0 });
+const emit = defineEmits<{ close: []; layout: []; select: [path: string]; export: [path: string]; openFolder: [] }>();
+const generated = computed(() => Boolean(props.sessionId && props.generatedTracks.length));
+const preparing = ref(false);
+let disposed = false;
 
 const storeKey = "lyte-comparison-library-v1";
 function loadSaved() {
@@ -158,7 +162,7 @@ function setVolume(slot: Slot) {
 }
 function updateVolumes() { for (const slot of slots.value) setVolume(slot); }
 function selectDeck(path: string) {
-  activePath.value = path; updateVolumes(); announce.value = `Piste active : ${slots.value.find(slot => slot.file.path === path)?.file.name || ""}`;
+  activePath.value = path; emit("select", path); updateVolumes(); announce.value = `Piste active : ${slots.value.find(slot => slot.file.path === path)?.file.name || ""}`;
   const audio = audioRefs.get(path);
   if (audio && playing.value) {
     if (audio.readyState >= 1) audio.currentTime = Math.min(playhead.value, audio.duration || playhead.value);
@@ -166,12 +170,15 @@ function selectDeck(path: string) {
   }
 }
 async function addTrack(file: LibraryFile) {
-  trackError.value = "";
+  if (!preparing.value) trackError.value = "";
   if (slots.value.some(slot => slot.file.path === file.path)) { selectDeck(file.path); return; }
   if (slots.value.length >= 4) { trackError.value = "Quatre pistes sont déjà chargées. Retire-en une avant d’en ajouter une autre."; return; }
   analyzing.value = [...analyzing.value, file.path];
   try {
-    const analysis = await invoke<Analysis>("analyze_comparison_track", { path: file.path });
+    const analysis = generated.value
+      ? await invoke<Analysis>("prepare_auto_comparison", { sessionId: props.sessionId, variantId: file.variantId })
+      : await invoke<Analysis>("analyze_comparison_track", { path: file.path });
+    if (disposed) { await invoke("revoke_comparison_track", { path: file.path }).catch(() => undefined); return; }
     slots.value = [...slots.value, { file, analysis }];
     if (!playing.value) activePath.value = file.path;
     announce.value = `Piste ajoutée : ${file.name}`;
@@ -263,9 +270,21 @@ function sizeLabel(bytes: number) { return bytes < 1_048_576 ? `${Math.max(1, Ma
 function toggleMode(equalized: boolean) { matched.value = equalized; updateVolumes(); }
 function ended(path: string) { if (path === activePath.value) pause(); }
 
-onMounted(async () => { await onProgress(); await nextTick(); emit("layout"); });
+onMounted(async () => {
+  if (generated.value) {
+    preparing.value = true;
+    for (const file of props.generatedTracks) { if (disposed) break; await addTrack(file); }
+    if (!disposed) {
+      activePath.value = slots.value.find(slot => slot.file.path === props.selectedPath)?.file.path || slots.value[0]?.file.path || "";
+      playhead.value = Math.min(props.startSeconds, duration.value);
+      updateVolumes(); preparing.value = false;
+    }
+  } else await onProgress();
+  await nextTick(); emit("layout");
+});
 watch([() => projects.value.length, () => slots.value.length, scanBusy], async () => { await nextTick(); emit("layout"); });
 onUnmounted(() => {
+  disposed = true;
   unlistenProgress?.();
   if (scanBusy.value) void invoke("cancel_library_scan");
   for (const slot of slots.value) { releaseAudio(slot.file.path); void invoke("revoke_comparison_track", { path: slot.file.path }); }
@@ -279,6 +298,10 @@ onUnmounted(() => {
       <button class="compare-close" type="button" @click="emit('close')">Retour au mastering</button>
     </header>
 
+    <section v-if="generated" class="library-intro"><div><h2>Écoute tes trois rendus Hard Techno.</h2><p>Les variantes sont chargées automatiquement. Lance Lecture, passe de Fidèle à Dense ou Agressif, puis exporte le rendu choisi.</p></div></section>
+    <p v-if="preparing" role="status" class="match-note">Préparation de l’écoute… {{ slots.length }} / {{ generatedTracks.length }} rendus prêts.</p>
+    <p v-if="generated && trackError && !slots.length" class="compare-error" role="alert">{{ trackError }}</p>
+    <template v-if="!generated">
     <section class="library-intro">
       <div><h2>Choisis le rendu qui sonne juste.</h2><p>LYTE parcourt uniquement le dossier que tu choisis. Les fichiers restent sur place; aucune piste n’est envoyée.</p></div>
       <div class="library-actions"><button class="compare-primary" type="button" :disabled="scanBusy" @click="selectFolder">{{ root ? 'Choisir un autre dossier' : 'Choisir un dossier' }}</button><button v-if="root" class="compare-secondary" type="button" :disabled="scanBusy" @click="scanFolder()">Actualiser</button></div>
@@ -327,8 +350,10 @@ onUnmounted(() => {
     </div>
     <p v-if="!scanBusy && root && !files.length && !scanError" class="empty-note">Aucun WAV, FLAC, MP3 ou M4A trouvé dans ce dossier. Choisis ou actualise un dossier qui contient tes sources et tes exports.</p>
 
+    </template>
+
     <section v-if="slots.length" class="comparison-panel" aria-labelledby="comparison-title">
-      <div class="comparison-heading"><div><p class="compare-eyebrow">ÉCOUTE COMPARATIVE</p><h2 id="comparison-title">{{ slots.length }} / 4 pistes chargées</h2></div><span class="local-badge">LOCAL</span></div>
+      <div class="comparison-heading"><div><p class="compare-eyebrow">ÉCOUTE COMPARATIVE</p><h2 id="comparison-title">{{ slots.length }} / {{ generated ? generatedTracks.length : 4 }} pistes chargées</h2></div><span class="local-badge">LOCAL</span></div>
       <div class="volume-modes" role="group" aria-label="Mode de niveau d’écoute">
         <button type="button" :aria-pressed="matched" :class="{ active: matched }" @click="toggleMode(true)">Volume égalisé <small>comparer le rendu</small></button>
         <button type="button" :aria-pressed="!matched" :class="{ active: !matched }" @click="toggleMode(false)">Niveau réel <small>écouter comme livré</small></button>
@@ -336,13 +361,16 @@ onUnmounted(() => {
       <p class="match-note">{{ matched ? 'Niveau d’écoute calé sur la piste la plus calme (aucun master n’est amplifié).' : 'Gain original, sans égalisation de loudness.' }} Le volume d’écoute reste réglable sur le PC.</p>
       <div class="deck-list" role="radiogroup" aria-label="Piste entendue">
         <article v-for="slot in slots" :key="slot.file.path" class="deck" :class="{ selected: slot.file.path === activePath }">
-          <div class="deck-heading"><label class="deck-radio"><input type="radio" name="active-master" :value="slot.file.path" :checked="slot.file.path === activePath" @change="selectDeck(slot.file.path)" /><span><strong>{{ slot.file.name }}</strong><small>{{ slot.file.kind === 'source' ? 'Source' : slot.file.profile ? `Master ${displayProfile(slot.file.profile)}` : 'Rendu' }}</small></span></label><button class="remove-deck" type="button" :aria-label="`Retirer ${slot.file.name} de l’écoute`" @click="removeTrack(slot.file.path)">×</button></div>
+          <div class="deck-heading"><label class="deck-radio"><input type="radio" name="active-master" :value="slot.file.path" :checked="slot.file.path === activePath" @change="selectDeck(slot.file.path)" /><span><strong>{{ slot.file.name }}</strong><small>{{ slot.file.kind === 'source' ? 'Source' : slot.file.profile ? `Master ${displayProfile(slot.file.profile)}` : 'Rendu' }}</small></span></label><button v-if="!generated" class="remove-deck" type="button" :aria-label="`Retirer ${slot.file.name} de l’écoute`" @click="removeTrack(slot.file.path)">×</button></div>
           <div class="waveform-row"><div class="waveform" :aria-label="`Forme d’onde de ${slot.file.name}`"><svg viewBox="0 0 240 48" preserveAspectRatio="none" aria-hidden="true"><rect v-for="(peak, index) in slot.analysis.waveform.peaks" :key="index" :x="index" :y="24 - Math.max(1, peak * 22)" width="0.72" :height="Math.max(2, peak * 44)" rx="0.25" /></svg><span class="waveform-cursor" :style="waveformStyle(slot)" /></div><span class="track-duration">{{ formatTime(slot.analysis.waveform.durationSeconds) }}</span></div>
           <div class="deck-measures"><span>LUFS intégré <strong>{{ slot.analysis.measurements.integratedLufs.toFixed(1) }}</strong></span><span>True peak <strong>{{ slot.analysis.measurements.truePeakDbtp.toFixed(1) }} dBTP</strong></span><span>Facteur de crête <strong>{{ slot.analysis.measurements.peakFactorDb.toFixed(1) }} dB</strong></span><span>Grave relatif · 30–150 Hz <strong>{{ slot.analysis.measurements.bassRatioDb.toFixed(1) }} dB</strong></span><span class="aac-measure" :class="{ unsafe: slot.analysis.measurements.aacTruePeakDbtp != null && slot.analysis.measurements.aacTruePeakDbtp > 0 }">AAC · 256 kb/s <strong>{{ slot.analysis.measurements.aacTruePeakDbtp == null ? '—' : `${slot.analysis.measurements.aacTruePeakDbtp.toFixed(1)} dBTP` }}</strong></span><span v-if="matched">Gain d’écoute <strong>{{ gainLabel(slot) }}</strong></span></div>
           <audio :ref="element => setAudioRef(slot.file.path, element)" :src="convertFileSrc(slot.analysis.playbackPath)" preload="auto" @timeupdate="updatePlayhead(slot.file.path, $event)" @ended="ended(slot.file.path)" @error="playbackError(slot, $event)" />
         </article>
       </div>
-      <div class="transport"><div class="transport-buttons"><button type="button" class="compare-primary" :disabled="playing" @click="play">Lecture</button><button type="button" class="compare-secondary" :disabled="!playing" @click="pause">Pause</button><button type="button" class="compare-secondary" @click="stop">Arrêter</button></div><div class="timeline"><span>{{ formatTime(playhead) }}</span><label class="sr-only" for="compare-seek">Position d’écoute</label><input id="compare-seek" type="range" min="0" :max="Math.max(1, duration)" step="0.05" :value="Math.min(playhead, duration)" @input="seek" /><span>{{ formatTime(duration) }}</span></div></div>
+      <div class="transport"><div class="transport-buttons"><button type="button" class="compare-primary" :disabled="playing || preparing" @click="play">Lecture</button><button type="button" class="compare-secondary" :disabled="!playing" @click="pause">Pause</button><button type="button" class="compare-secondary" @click="stop">Arrêter</button></div><div class="timeline"><span>{{ formatTime(playhead) }}</span><label class="sr-only" for="compare-seek">Position d’écoute</label><input id="compare-seek" type="range" min="0" :max="Math.max(1, duration)" step="0.05" :value="Math.min(playhead, duration)" @input="seek" /><span>{{ formatTime(duration) }}</span></div></div>
+      <div v-if="generated" class="transport"><span>{{ activeSlot?.file.name }}</span><button class="compare-primary" type="button" :disabled="preparing || !activeSlot || exporting || exportedPaths.includes(activePath)" @click="emit('export', activePath)">{{ exporting ? 'Export en cours…' : exportedPaths.includes(activePath) ? '✓ Master exporté' : 'Exporter ce rendu WAV' }}</button></div>
+      <p v-if="generated && exportOutput" class="library-root">{{ exportOutput }} <button class="compare-secondary" type="button" @click="emit('openFolder')">Ouvrir le dossier</button></p>
+      <p v-if="generated && exportError" class="compare-error" role="alert">{{ exportError }}</p>
       <p class="measurement-note">Ces mesures décrivent des dimensions distinctes, pas une note globale. Le contrôle AAC est une simulation FFmpeg AAC à 256 kb/s, spécifique à cet encodeur; il ne certifie pas tous les services de diffusion.</p>
       <p v-if="trackError" class="compare-error" role="alert">{{ trackError }}</p>
       <p class="sr-only" aria-live="polite">{{ announce }}</p>

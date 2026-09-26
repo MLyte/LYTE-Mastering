@@ -495,17 +495,45 @@ fn prepare_comparison_playback(ffmpeg: &Path, source: &Path) -> Result<(tempfile
     ])?;
     Ok((preview, output))
 }
+// Session variants are already measured; only decode a compatible listening copy.
+#[tauri::command]
+async fn prepare_auto_comparison(
+    app: tauri::AppHandle,
+    session_id: String,
+    variant_id: String,
+) -> Result<ComparisonTrack, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let session = state.session.lock()
+            .map_err(|_| "Cannot access the mastering session.")?;
+        let session = session.as_ref().filter(|session| session.id == session_id)
+            .ok_or("This mastering session is no longer available.")?;
+        let variant = session.variants.iter().find(|variant| variant.id == variant_id)
+            .ok_or("Unknown master variant.")?;
+        let path = audio_path(&variant.path)?;
+        let track = inspect_track(variant.path.clone())?;
+        let waveform = inspect_waveform(app.clone(), variant.path.clone())?;
+        let ffmpeg = executable(&root(&app)?, "ffmpeg.exe", true)
+            .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
+        let (preview, playback_path) = prepare_comparison_playback(&ffmpeg, &path)?;
+        state.comparison_previews.lock()
+            .map_err(|_| "Could not retain the comparison playback file.")?
+            .insert(path, preview);
+        Ok(ComparisonTrack { track, waveform, measurements: variant.measurements.clone(), playback_path: playback_path.to_string_lossy().into_owned() })
+    }).await.map_err(|_| "The listening preview stopped unexpectedly.")?
+}
+
 #[tauri::command]
 fn revoke_comparison_track(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     path: String,
 ) {
+    let path = PathBuf::from(path);
+    if let Ok(mut previews) = state.comparison_previews.lock() { previews.remove(&path); }
     if let Ok(root) = state.library_root.lock() {
         if let Some(root) = root.as_ref() {
-            let path = PathBuf::from(path);
             if path.starts_with(root) {
-                if let Ok(mut previews) = state.comparison_previews.lock() { previews.remove(&path); }
                 let _ = app.asset_protocol_scope().forbid_file(path);
             }
         }
@@ -1537,6 +1565,7 @@ fn main() {
             scan_audio_folder,
             cancel_library_scan,
             analyze_comparison_track,
+            prepare_auto_comparison,
             revoke_comparison_track,
             start_mastering,
             start_auto_mastering,
