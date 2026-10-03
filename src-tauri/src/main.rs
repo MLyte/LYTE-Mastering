@@ -50,6 +50,8 @@ static AUTO_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 struct AutoSession {
     id: String,
+    source_path: PathBuf,
+    source_measurements: Measurements,
     export_stem: String,
     export_folder: PathBuf,
     variants: Vec<AutoVariant>,
@@ -508,18 +510,23 @@ async fn prepare_auto_comparison(
             .map_err(|_| "Cannot access the mastering session.")?;
         let session = session.as_ref().filter(|session| session.id == session_id)
             .ok_or("This mastering session is no longer available.")?;
-        let variant = session.variants.iter().find(|variant| variant.id == variant_id)
-            .ok_or("Unknown master variant.")?;
-        let path = audio_path(&variant.path)?;
-        let track = inspect_track(variant.path.clone())?;
-        let waveform = inspect_waveform(app.clone(), variant.path.clone())?;
+        let (path_string, measurements) = if variant_id == "source" {
+            (session.source_path.to_string_lossy().into_owned(), session.source_measurements.clone())
+        } else {
+            let variant = session.variants.iter().find(|variant| variant.id == variant_id)
+                .ok_or("Unknown master variant.")?;
+            (variant.path.clone(), variant.measurements.clone())
+        };
+        let path = audio_path(&path_string)?;
+        let track = inspect_track(path_string.clone())?;
+        let waveform = inspect_waveform(app.clone(), path_string)?;
         let ffmpeg = executable(&root(&app)?, "ffmpeg.exe", true)
             .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
         let (preview, playback_path) = prepare_comparison_playback(&ffmpeg, &path)?;
         state.comparison_previews.lock()
             .map_err(|_| "Could not retain the comparison playback file.")?
             .insert(path, preview);
-        Ok(ComparisonTrack { track, waveform, measurements: variant.measurements.clone(), playback_path: playback_path.to_string_lossy().into_owned() })
+        Ok(ComparisonTrack { track, waveform, measurements, playback_path: playback_path.to_string_lossy().into_owned() })
     }).await.map_err(|_| "The listening preview stopped unexpectedly.")?
 }
 
@@ -731,14 +738,16 @@ fn ffmpeg_log(ffmpeg: &Path, args: &[String]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&result.stderr).into())
 }
 fn metric(log: &str, name: &str) -> Option<f64> {
+    // ebur128 summaries are unprefixed, whereas astats/volumedetect include
+    // a filter prefix. Read the last matching summary (Overall for astats).
+    // A missing/non-finite final value must not fall back to a channel value.
     log.lines().rev().find_map(|line| {
-        line.trim()
-            .strip_prefix(name)?
-            .split_whitespace()
-            .next()?
-            .parse()
-            .ok()
-    })
+        let mut line = line.trim();
+        while line.starts_with('[') {
+            line = line.split_once(']')?.1.trim_start();
+        }
+        line.strip_prefix(name)
+    })?.split_whitespace().next()?.parse::<f64>().ok().filter(|value| value.is_finite())
 }
 fn validate_segment(segment: &Segment) -> Result<(), String> {
     if !segment.start_seconds.is_finite() || segment.start_seconds < 0.0 {
@@ -758,10 +767,13 @@ fn measured_input_args(path: &Path, segment: Option<&Segment>) -> Vec<String> {
     args
 }
 fn measure_window(app: &tauri::AppHandle, path: &Path, segment: Option<&Segment>) -> Result<Measurements, String> {
-    if let Some(segment) = segment { validate_segment(segment)?; }
     let base = root(app)?;
     let ffmpeg = executable(&base, "ffmpeg.exe", true)
         .ok_or("FFmpeg was not found. Place ffmpeg.exe in /bin.")?;
+    measure_window_with_ffmpeg(&ffmpeg, path, segment)
+}
+fn measure_window_with_ffmpeg(ffmpeg: &Path, path: &Path, segment: Option<&Segment>) -> Result<Measurements, String> {
+    if let Some(segment) = segment { validate_segment(segment)?; }
     let mut meter_args = measured_input_args(path, segment);
     meter_args.extend(["-filter:a".into(), "ebur128=peak=true,astats=metadata=0:reset=0".into(), "-f".into(), "null".into(), "-".into()]);
     let log = ffmpeg_log(
@@ -772,18 +784,16 @@ fn measure_window(app: &tauri::AppHandle, path: &Path, segment: Option<&Segment>
         return Err("Auto Hard Techno supports mono or stereo files only.".into());
     }
     let integrated = metric(&log, "I:").ok_or("Could not measure integrated loudness.")?;
-    let peak = metric(&log, "Peak:")
-        .or_else(|| metric(&log, "Peak level dB:"))
-        .ok_or("Could not measure true peak.")?;
-    let rms = metric(&log, "RMS level dB:").unwrap_or(integrated);
+    let peak = metric(&log, "Peak:").ok_or("Could not measure true peak.")?;
+    let sample_peak = metric(&log, "Peak level dB:").ok_or("Could not measure sample peak.")?;
+    let rms = metric(&log, "RMS level dB:").ok_or("Could not measure RMS level.")?;
     let volume = |filter: &str| -> Result<f64, String> {
         let mut args = measured_input_args(path, segment);
         args.extend(["-af".into(), filter.into(), "-f".into(), "null".into(), "-".into()]);
         let log = ffmpeg_log(&ffmpeg, &args)?;
-        Ok(metric(&log, "mean_volume:").unwrap_or(rms))
+        metric(&log, "mean_volume:").ok_or_else(|| "Could not measure frequency-band energy.".into())
     };
     let full_mean = volume("volumedetect")?;
-    let bass_mean = volume("highpass=f=30,lowpass=f=150,volumedetect")?;
     let bands = [(30, 150), (150, 500), (500, 4000), (4000, 16000)];
     let mut band_energy_db = [0.0; 4];
     for (index, (low, high)) in bands.iter().enumerate() {
@@ -792,8 +802,8 @@ fn measure_window(app: &tauri::AppHandle, path: &Path, segment: Option<&Segment>
     Ok(Measurements {
         integrated_lufs: integrated,
         true_peak_dbtp: peak,
-        peak_factor_db: peak - rms,
-        bass_ratio_db: bass_mean - full_mean,
+        peak_factor_db: sample_peak - rms,
+        bass_ratio_db: band_energy_db[0],
         band_energy_db,
         aac_true_peak_dbtp: None,
     })
@@ -1057,15 +1067,40 @@ fn diagnose_variant(source: &Measurements, variant: &mut AutoVariant, profile: A
     variant.reference_similarity = reference.map(|reference| reference_similarity(&variant.segment_measurements, reference));
     variant.diagnostics = diagnostics;
 }
-fn delivery_ready(variant: &AutoVariant, profile: AutoProfile) -> bool {
-    variant.peak_factor_loss_db <= profile.crest_budget_db
+fn wav_within_budgets(variant: &AutoVariant, profile: AutoProfile) -> bool {
+    variant.measurements.true_peak_dbtp.is_finite()
+        && variant.measurements.true_peak_dbtp <= TRUE_PEAK_CEILING
+        && variant.peak_factor_loss_db.is_finite()
+        && variant.peak_factor_loss_db <= profile.crest_budget_db
+        && variant.bass_change_db.is_finite()
         && variant.bass_change_db.abs() <= profile.bass_budget_db
+}
+fn delivery_ready(variant: &AutoVariant, profile: AutoProfile) -> bool {
+    // Readiness here concerns the WAV target. AAC has its own measured warning
+    // and separate safe export; it must not silently attenuate the WAV.
+    wav_within_budgets(variant, profile)
+        && (variant.measurements.integrated_lufs - variant.target_lufs).abs() <= AUTO_TARGET_TOLERANCE_LU + 1e-9
 }
 fn delivery_ready_for(variant: &AutoVariant) -> bool {
     AUTO_PROFILES.iter().copied()
         .find(|profile| profile.id == variant.profile_id)
         .map(|profile| delivery_ready(variant, profile))
         .unwrap_or(false)
+}
+fn select_auto_candidate(variants: &[AutoVariant]) -> Option<&AutoVariant> {
+    let within_budgets = |variant: &AutoVariant| AUTO_PROFILES.iter().copied()
+        .find(|profile| profile.id == variant.profile_id)
+        .map(|profile| wav_within_budgets(variant, profile)).unwrap_or(false);
+    let target_error = |variant: &AutoVariant| (variant.measurements.integrated_lufs - variant.target_lufs).abs();
+    variants.iter().min_by(|left, right| {
+        delivery_ready_for(right).cmp(&delivery_ready_for(left))
+            .then_with(|| within_budgets(right).cmp(&within_budgets(left)))
+            .then_with(|| target_error(left).total_cmp(&target_error(right)))
+            .then_with(|| left.peak_factor_loss_db.max(0.0).total_cmp(&right.peak_factor_loss_db.max(0.0)))
+            .then_with(|| left.bass_change_db.abs().total_cmp(&right.bass_change_db.abs()))
+            .then_with(|| right.reference_similarity.unwrap_or(0).cmp(&left.reference_similarity.unwrap_or(0)))
+            .then_with(|| left.profile_id.cmp(&right.profile_id))
+    })
 }
 fn render_profile_attempt(
     app: &tauri::AppHandle,
@@ -1321,10 +1356,9 @@ async fn start_auto_mastering(
         let local_reference = folder.join("reference.wav");
         pcm24_segment(&worker, &reference_input, &local_reference, &reference_selection)?;
         let reference_measurements = measure(&worker, &local_reference)?;
-        // The selected reference is the artistic loudness ceiling. The UI target
-        // may only request a quieter result; it cannot force Auto above reference.
-        let reference_target = reference_measurements.integrated_lufs.clamp(AUTO_TARGET_MIN_LUFS, AUTO_TARGET_MAX_LUFS);
-        let automatic_target = reference_target.min(options.target_lufs);
+        // The reference informs comparison, not the user's requested level.
+        // Final calibration remains bounded if that target cannot be reached.
+        let automatic_target = options.target_lufs;
         let mut variants = Vec::new();
         for profile in AUTO_PROFILES {
             let mut variant = calibrate_profile(&worker, &source, &folder, profile, automatic_target, &options.source_segment)?;
@@ -1332,32 +1366,18 @@ async fn start_auto_mastering(
             variants.push(variant);
         }
         let is_delivery_ready = variants.iter().any(delivery_ready_for);
-        let selected = variants
-            .iter()
-            .max_by(|left, right| {
-                delivery_ready_for(left)
-                    .cmp(&delivery_ready_for(right))
-                    .then_with(|| (left.profile_id == "dense").cmp(&(right.profile_id == "dense")))
-                    .then_with(|| right.achieved_delta_lu.abs().total_cmp(&left.achieved_delta_lu.abs()))
-                    .then_with(|| {
-                        left.reference_similarity
-                            .unwrap_or(0)
-                            .cmp(&right.reference_similarity.unwrap_or(0))
-                            .then_with(|| right.achieved_delta_lu.abs().total_cmp(&left.achieved_delta_lu.abs()))
-                    })
-            })
+        let selected = select_auto_candidate(&variants)
             .ok_or("The Auto profiles did not produce a master.")?;
         let recommended_id = if is_delivery_ready {
             selected.id.clone()
         } else {
             String::new()
         };
-        let similarity = selected.reference_similarity.unwrap_or(0);
-        let reference_kind = if using_default_reference { "built-in" } else { "selected" };
         let recommendation = if is_delivery_ready {
-            format!("{} is the recommended listening candidate: it best balances the target, impact and low-end limits, with a {similarity}/100 measured similarity to the {reference_kind} reference. AAC is reported separately and does not attenuate this WAV master.", selected.profile_label)
+            format!("{} est proposé à l’écoute : {:.1} LUFS pour une cible de {:.1}, avec un WAV sous le plafond de crête et des variations de facteur de crête et de grave dans les limites du profil. Le choix suit les mesures : écart à la cible, perte de facteur de crête, variation du grave, puis similarité à la référence. Ce classement est une aide au choix, pas une note de qualité sonore. {}", selected.profile_label, selected.measurements.integrated_lufs, automatic_target,
+                if selected.aac_risk { "La conversion AAC directe dépasse 0 dBTP : prévoir l’export AAC adapté séparément." } else { "Le contrôle AAC est indiqué séparément." })
         } else {
-            format!("No profile meets the target, impact and low-end budgets. {} is the least risky listening candidate; AAC remains a separate delivery warning. Consider lowering the target or revisiting the source mix.", selected.profile_label)
+            "Aucun profil ne respecte ensemble la cible à ±0,3 LU, le plafond WAV et les limites de facteur de crête et de grave. Compare les trois rendus à la source à volume égalisé ; conserve la source ou revois la cible et le mix si aucun rendu ne te convient. Le contrôle AAC reste distinct.".into()
         };
         *worker
             .state::<AppState>()
@@ -1365,6 +1385,8 @@ async fn start_auto_mastering(
             .lock()
             .map_err(|_| "Cannot record the mastering session.")? = Some(AutoSession {
             id: session_id.clone(),
+            source_path: source.clone(),
+            source_measurements: source_measurements.clone(),
             export_stem,
             export_folder,
             variants: variants.clone(),
@@ -1592,6 +1614,113 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../bin/ffmpeg.exe")
     }
     #[test]
+    fn parses_ffmpeg_prefixed_overall_metrics_without_silent_fallbacks() {
+        let log = "[Parsed_astats_1 @ 0x123] RMS level dB: -7.0\n\
+            [Parsed_astats_1 @ 0x123] Overall\n\
+            [Parsed_astats_1 @ 0x123] RMS level dB: -8.792382\n\
+            [Parsed_volumedetect_2 @ 0x456] mean_volume: -11.1 dB\n\
+              I: -7.1 LUFS\n    Peak: -0.1 dBFS";
+        assert_eq!(metric(log, "RMS level dB:"), Some(-8.792382));
+        assert_eq!(metric(log, "mean_volume:"), Some(-11.1));
+        assert_eq!(metric(log, "I:"), Some(-7.1));
+        assert_eq!(metric(log, "Peak:"), Some(-0.1));
+        assert_eq!(metric("[info] [Parsed_astats_0 @ 0x1] Peak level dB: -2.0", "Peak level dB:"), Some(-2.0));
+        assert_eq!(metric("RMS level dB: -8\nRMS level dB: NaN", "RMS level dB:"), None);
+        assert_eq!(metric("mean_volume: -inf dB", "mean_volume:"), None);
+        assert_eq!(metric(log, "missing:"), None);
+    }
+    #[test]
+    fn actual_measurements_distinguish_bass_and_crest_from_loudness() {
+        let work = tempfile::tempdir().unwrap();
+        let ffmpeg = test_ffmpeg();
+        let mut measured = Vec::new();
+        for frequency in [60, 1000] {
+            let path = work.path().join(format!("tone-{frequency}.wav"));
+            ffmpeg_log(&ffmpeg, &[
+                "-f".into(), "lavfi".into(), "-i".into(),
+                format!("sine=frequency={frequency}:duration=3:sample_rate=48000"),
+                "-c:a".into(), "pcm_s24le".into(), path.to_string_lossy().into_owned(),
+            ]).unwrap();
+            measured.push(measure_window_with_ffmpeg(&ffmpeg, &path, None).unwrap());
+        }
+        for measure in &measured {
+            assert!((measure.peak_factor_db - 3.0103).abs() < 0.05, "A sine has a 3.01 dB crest factor");
+            assert!(measure.band_energy_db.iter().all(|value| value.is_finite()));
+        }
+        assert!(measured[0].bass_ratio_db > -1.0);
+        assert!(measured[1].bass_ratio_db < -25.0);
+        assert!(measured[0].band_energy_db[2] < measured[1].band_energy_db[2] - 20.0);
+    }
+    fn candidate_for_test(profile: AutoProfile, lufs: f64) -> AutoVariant {
+        let measurements = Measurements { integrated_lufs: lufs, true_peak_dbtp: -1.0, peak_factor_db: 7.0,
+            bass_ratio_db: -6.0, band_energy_db: [-6.0, -9.0, -12.0, -18.0], aac_true_peak_dbtp: Some(1.4) };
+        AutoVariant { id: profile.id.into(), profile_id: profile.id.into(), profile_label: profile.label.into(),
+            target_lufs: -5.0, engine_reference_db: -5.0, achieved_delta_lu: lufs + 5.0, attempts: 1,
+            path: String::new(), measurements: measurements.clone(), segment_measurements: measurements,
+            preserve_bass: profile.preserve_bass, peak_factor_loss_db: 1.0, bass_change_db: 0.0,
+            aac_risk: true, diagnostics: vec![], reference_similarity: Some(90) }
+    }
+    #[test]
+    fn auto_recommendation_uses_measures_and_requires_the_wav_target() {
+        let faithful = candidate_for_test(AUTO_PROFILES[0], -5.0);
+        let mut dense = candidate_for_test(AUTO_PROFILES[1], -6.6);
+        dense.reference_similarity = Some(100);
+        assert!(!delivery_ready_for(&dense));
+        assert_eq!(select_auto_candidate(&[dense.clone(), faithful.clone()]).unwrap().id, "faithful");
+        // Even a stale declared delta cannot make a missed measured target pass.
+        dense.achieved_delta_lu = 0.0;
+        assert!(!delivery_ready_for(&dense));
+        let mut clipped = faithful.clone();
+        clipped.measurements.true_peak_dbtp = 0.1;
+        assert!(!delivery_ready_for(&clipped));
+        let mut altered_bass = faithful.clone();
+        altered_bass.bass_change_db = 3.0;
+        assert!(!delivery_ready_for(&altered_bass));
+        let mut more_impact_loss = candidate_for_test(AUTO_PROFILES[1], -5.0);
+        more_impact_loss.peak_factor_loss_db = 3.0;
+        assert_eq!(select_auto_candidate(&[more_impact_loss, faithful]).unwrap().id, "faithful");
+        let missed: Vec<_> = AUTO_PROFILES.into_iter().map(|profile| candidate_for_test(profile, -6.0)).collect();
+        assert!(!missed.iter().any(delivery_ready_for));
+    }
+    #[test]
+    #[ignore = "requires LYTE_AUTO_AUDIT_SESSION; remeasures existing session files without rendering"]
+    fn audit_existing_auto_session() {
+        let folder = PathBuf::from(std::env::var("LYTE_AUTO_AUDIT_SESSION").unwrap());
+        let ffmpeg = test_ffmpeg();
+        let source_path = folder.join("source.wav");
+        let original = fs::read(&source_path).unwrap();
+        let source = measure_window_with_ffmpeg(&ffmpeg, &source_path, None).unwrap();
+        let reference = measure_window_with_ffmpeg(&ffmpeg, &folder.join("reference.wav"), None).unwrap();
+        let segment = Segment { start_seconds: 0.0, duration_seconds: 30.0 };
+        let temp = tempfile::tempdir().unwrap();
+        let mut variants = Vec::new();
+        for profile in AUTO_PROFILES {
+            let path = folder.join(format!("{}-1.wav", profile.id));
+            let mut measurements = measure_window_with_ffmpeg(&ffmpeg, &path, None).unwrap();
+            let encoded = temp.path().join(format!("{}.m4a", profile.id));
+            ffmpeg_log(&ffmpeg, &["-i".into(), path.to_string_lossy().into_owned(),
+                "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(), encoded.to_string_lossy().into_owned()]).unwrap();
+            measurements.aac_true_peak_dbtp = Some(delivery_levels(&ffmpeg, &encoded).unwrap().1);
+            let mut variant = candidate_for_test(profile, measurements.integrated_lufs);
+            variant.path = path.to_string_lossy().into_owned();
+            variant.segment_measurements = measure_window_with_ffmpeg(&ffmpeg, &path, Some(&segment)).unwrap();
+            variant.measurements = measurements;
+            diagnose_variant(&source, &mut variant, profile, Some(&reference));
+            variants.push(variant);
+        }
+        let recommended = select_auto_candidate(&variants).filter(|variant| delivery_ready_for(variant));
+        let report = serde_json::json!({ "session": folder, "targetLufs": -5.0,
+            "source": source, "reference": reference, "variants": variants,
+            "recommendedId": recommended.map(|variant| variant.id.as_str()),
+            "referenceComparisonSegment": { "startSeconds": 0, "durationSeconds": 30 },
+            "note": "Existing audio only; no processing changes. Reference similarity assumes the first 30 seconds of each source/master." });
+        let output = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/artifacts/auto-audit");
+        fs::create_dir_all(&output).unwrap();
+        fs::write(output.join("measurements.json"), serde_json::to_string_pretty(&report).unwrap()).unwrap();
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        assert_eq!(fs::read(&source_path).unwrap(), original);
+    }
+    #[test]
     fn comparison_preview_decodes_float64_and_cleans_up() {
         let work = tempfile::tempdir().unwrap();
         let source = work.path().join("source.wav");
@@ -1783,7 +1912,7 @@ mod tests {
             attempts: 1,
             path: "test.wav".into(),
             measurements: Measurements {
-                integrated_lufs: -8.0,
+                integrated_lufs: -5.0,
                 true_peak_dbtp: -1.0,
                 peak_factor_db: 7.0,
                 bass_ratio_db: -6.0,

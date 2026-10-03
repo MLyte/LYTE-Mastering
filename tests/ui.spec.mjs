@@ -145,7 +145,7 @@ test('Auto sends the explicit target and three profile result is exportable', as
   await page.evaluate(() => window.testEmit('mastering-progress', 100))
   await expect(page.getByRole('progressbar')).toHaveAttribute('value','22')
   await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:\\Temp\\source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-4.5,variants:[window.testVariant('faithful','Fidèle',-4.7),window.testVariant('dense','Dense',-4.5),window.testVariant('aggressive','Agressif',-4.4)],recommendedId:'dense',recommendation:'Dense is selected as the middle trade-off.'}))
-  await expect(page.locator('.deck')).toHaveCount(3)
+  await expect(page.locator('.deck')).toHaveCount(4)
   await page.getByRole('button', { name:'Retour au mastering' }).click()
   await expect(page.getByText('Three profiles ready')).toBeVisible()
   await expect(page.locator('.variant')).toHaveCount(3)
@@ -167,14 +167,14 @@ test('Auto accepts an optional reference passage and shows its comparison', asyn
   const options = await page.evaluate(() => window.testCalls.find(x => x.cmd === 'start_auto_mastering').args.options)
   expect(options.reference).toEqual({input:'C:\\Audio\\reference.wav',segment:{startSeconds:30,durationSeconds:30}})
   await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:\\Temp\\source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-5,referencePath:'C:\\Temp\\reference.wav',referenceSegment:window.testMeasurement(-5),variants:[window.testVariant('faithful','Fidèle',-5,88),window.testVariant('dense','Dense',-5,91),window.testVariant('aggressive','Agressif',-5,82)],recommendedId:'dense',recommendation:'Dense is closest to the selected reference passage.'}))
-  await expect(page.locator('.deck')).toHaveCount(3)
+  await expect(page.locator('.deck')).toHaveCount(4)
   await page.getByRole('button', { name:'Retour au mastering' }).click()
   await expect(page.getByText('Reference', { exact:true })).toBeVisible()
   await expect(page.getByText('Ref 91/100')).toBeVisible()
 })
 
 
-test('Auto opens three listening decks and exports the chosen variant before any folder scan', async ({ page }) => {
+test('Auto opens three masters plus source and exports only a chosen master', async ({ page }) => {
   await mount(page)
   await page.evaluate(() => {
     window.testPlayCalls = 0
@@ -186,20 +186,24 @@ test('Auto opens three listening decks and exports the chosen variant before any
   await page.getByRole('button', { name:/Auto/ }).click()
   await page.getByRole('button', { name:'RENDER 3 PROFILES' }).click()
   await page.evaluate(() => window.finishAuto({sessionId:'session',sourcePath:'C:/Temp/source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-5,variants:[window.testVariant('faithful','Fidèle',-5),window.testVariant('dense','Dense',-5),window.testVariant('aggressive','Agressif',-5)],recommendedId:'dense',recommendation:'Dense recommendation.'}))
-  await expect(page.locator('.deck')).toHaveCount(3)
+  await expect(page.locator('.deck')).toHaveCount(4)
   await expect(page.getByRole('button', { name:'Lecture', exact:true })).toBeEnabled()
   await expect(page.locator('.deck.selected')).toContainText('Dense')
   await expect(page.locator('.auto-analysis')).toContainText('Dense recommendation.')
   await expect(page.locator('.render-analysis')).toHaveCount(3)
   await expect(page.locator('.recommended-badge')).toHaveCount(1)
-  await expect(page.locator('.deck').filter({ hasText:'Dense' }).locator('.recommended-badge')).toHaveText('Recommandé')
+  await expect(page.locator('.deck').filter({ hasText:'Dense' }).locator('.recommended-badge')).toHaveText('Écoute conseillée')
   for (const label of ['Fidèle','Dense','Agressif']) await expect(page.locator('.render-diagnostics').filter({ hasText:`${label} diagnostic.` })).toBeVisible()
   await expect(page.locator('.deck').filter({ hasText:'Agressif' }).locator('.render-metrics')).toContainText('-4.2 dB')
   await expect(page.locator('.deck').filter({ hasText:'Agressif' }).locator('.render-metrics')).toContainText('+1.5 dB')
-  expect(await page.evaluate(() => window.testCalls.filter(call => call.cmd === 'prepare_auto_comparison').map(call => call.args))).toEqual(['faithful','dense','aggressive'].map(variantId => ({sessionId:'session',variantId})))
+  expect(await page.evaluate(() => window.testCalls.filter(call => call.cmd === 'prepare_auto_comparison').map(call => call.args))).toEqual(['faithful','dense','aggressive','source'].map(variantId => ({sessionId:'session',variantId})))
   expect(await page.evaluate(() => window.testCalls.some(call => call.cmd === 'scan_audio_folder'))).toBe(false)
   await page.getByRole('button', { name:'Lecture', exact:true }).click()
-  expect(await page.evaluate(() => window.testPlayCalls)).toBe(3)
+  expect(await page.evaluate(() => window.testPlayCalls)).toBe(4)
+  await page.locator('.deck').last().getByRole('radio').check()
+  await expect(page.locator('.deck.selected')).toContainText('Source non masterisée')
+  await expect(page.getByRole('button', { name:'Exporter ce rendu WAV' })).toHaveCount(0)
+  expect(await page.evaluate(() => window.testCalls.some(call => call.cmd === 'export_auto_master'))).toBe(false)
   await page.locator('.deck').filter({ hasText:'Agressif' }).getByRole('radio').check()
   await expect(page.getByRole('button', { name:'Pause', exact:true })).toBeEnabled()
   await page.evaluate(() => { window.deferExport = true })
@@ -212,7 +216,7 @@ test('Auto opens three listening decks and exports the chosen variant before any
   expect(await page.evaluate(() => window.testCalls.find(call => call.cmd === 'export_auto_master').args)).toEqual({sessionId:'session',variantId:'aggressive'})
   await page.getByRole('button', { name:'Retour au mastering' }).click()
   await expect(page.locator('#variant-aggressive')).toBeChecked()
-  await expect.poll(() => page.evaluate(() => window.testCalls.filter(call => call.cmd === 'revoke_comparison_track').length)).toBe(3)
+  await expect.poll(() => page.evaluate(() => window.testCalls.filter(call => call.cmd === 'revoke_comparison_track').length)).toBe(4)
 })
 
 test('Auto preview failure keeps the render available for export', async ({ page }) => {
@@ -252,10 +256,10 @@ test('Auto keeps full render analysis visible without inventing a recommendation
       variant.measurements.aacTruePeakDbtp=2.4
     }
     const originalAnalysis=window.comparisonAnalysis
-    window.comparisonAnalysis=path=>({...originalAnalysis(path),measurements:variants.find(variant=>path.includes(variant.id)).measurements})
+    window.comparisonAnalysis=path=>({...originalAnalysis(path),measurements:variants.find(variant=>path.includes(variant.id))?.measurements || window.testMeasurement(-10)})
     window.finishAuto({sessionId:'session',sourcePath:'C:/Temp/source.wav',source:window.testMeasurement(-10),sourceSegment:window.testMeasurement(-7),targetLufs:-5,referenceSegment:window.testMeasurement(-2.9),usingDefaultReference:true,variants,recommendedId:'',recommendation:'Aucun profil ne respecte la cible. Réduire la cible ou revoir le mix.'})
   })
-  await expect(page.locator('.deck')).toHaveCount(3)
+  await expect(page.locator('.deck')).toHaveCount(4)
   await expect(page.getByRole('heading', {name:'Analyse des rendus'})).toBeVisible()
   await expect(page.locator('.auto-analysis')).toContainText('Aucun rendu recommandé')
   await expect(page.locator('.auto-analysis')).toContainText('Aucun profil ne respecte la cible.')
@@ -263,7 +267,7 @@ test('Auto keeps full render analysis visible without inventing a recommendation
   await expect(page.locator('.auto-analysis')).toContainText('-2.9 LUFS')
   await expect(page.locator('.recommended-badge')).toHaveCount(0)
   await expect(page.locator('.deck').filter({hasText:'Agressif'}).locator('.render-metrics')).toContainText('99/100')
-  await expect(page.locator('.deck').filter({hasText:'Agressif'}).locator('.render-metrics')).toContainText('-2.9 LU')
+  await expect(page.locator('.deck').filter({hasText:'Agressif'}).locator('.decision-measures')).toContainText('-2.9 LU')
   await expect(page.locator('.render-diagnostics')).toHaveCount(3)
   await expect(page.locator('.render-diagnostics').first()).toContainText('risque de dépassement')
   await expect(page.locator('.reference-note')).toContainText('Elle n’est pas une note de qualité')

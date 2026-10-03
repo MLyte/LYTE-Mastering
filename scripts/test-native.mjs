@@ -71,16 +71,19 @@ try {
     await page.evaluate(input => window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event: 'tauri://drag-drop', payload: { paths: [input], position: { x: 100, y: 100 } } }), fixture);
     await page.getByText('test track.' + format, { exact: true }).waitFor();
     await page.getByRole('button', { name: /Auto/ }).click();
-    await page.locator('#auto-target').fill('-5');
+    // Above the bundled reference's measured -5 LUFS: the reference must not
+    // silently lower the user's requested target.
+    await page.locator('#auto-target').fill('-4.5');
     const autoStart = Date.now();
     await page.getByRole('button', { name: 'RENDER 3 PROFILES' }).click();
-    await page.waitForFunction(() => document.querySelectorAll('.deck').length === 3 || document.querySelector('[role=alert]'), null, { timeout: 600000 });
+    await page.waitForFunction(() => document.querySelectorAll('.deck').length === 4 || document.querySelector('[role=alert]'), null, { timeout: 600000 });
     const autoError = await page.getByRole('alert').allTextContents();
     if (autoError.length) throw new Error(autoError.join('\n'));
-    const profiles = await page.locator('.deck').count();
+    const profiles = await page.locator('.render-analysis').count();
     if (profiles !== 3) throw new Error(`Expected three Auto profiles, received ${profiles}`);
-    await page.getByRole('heading', { name: 'Écoute tes trois rendus Hard Techno.' }).waitFor();
+    await page.getByRole('heading', { name: 'Compare les trois masters et la source.' }).waitFor();
     await page.getByRole('heading', { name: 'Analyse des rendus' }).waitFor();
+    if (!(await page.locator('.analysis-heading').innerText()).includes('-4.5 LUFS')) throw new Error('Reference changed the explicit target');
     if (await page.locator('.render-analysis').count() !== 3) throw new Error('The three Auto analyses must remain visible beside the listening decks');
     if (!await page.locator('.analysis-recommendation').innerText()) throw new Error('Auto recommendation missing from the listening screen');
     await page.waitForFunction(() => [...document.querySelectorAll('.deck audio')].every(audio => audio.readyState >= 2), null, { timeout: 30000 });
@@ -89,6 +92,10 @@ try {
     await page.locator('.deck input[type=radio]').last().check();
     await page.waitForTimeout(200);
     if (!await page.locator('.deck audio').evaluateAll(audios => audios.every(audio => !audio.paused && audio.currentTime > 0))) throw new Error('Auto playback stopped on switching');
+    if (await page.getByRole('button', { name: 'Exporter ce rendu WAV' }).count()) throw new Error('The unmastered source must not be exported as a master');
+    const volumes = await page.locator('.deck audio').evaluateAll(audios => audios.map(audio => audio.volume));
+    if (volumes.slice(0, 3).some(volume => volume !== 0) || !(volumes[3] > 0)) throw new Error('Source deck is not the only audible track');
+    await page.locator('.deck input[type=radio]').nth(2).check();
     const selectedName = await page.locator('.deck.selected .deck-heading strong').innerText();
     const previews = await page.locator('.deck audio').evaluateAll(audios => audios.map(audio => decodeURIComponent(new URL(audio.src).pathname.slice(1))));
     await page.getByRole('button', { name: 'Pause', exact: true }).click();
@@ -103,7 +110,7 @@ try {
     await page.waitForFunction(() => document.querySelectorAll('.deck').length === 0);
     await new Promise(resolve => setTimeout(resolve, 300));
     if (previews.some(preview => fs.existsSync(preview))) throw new Error('Auto listening copies were not cleaned up');
-    auto = { profiles, seconds: (Date.now() - autoStart) / 1000, targetLufs: -5, playback: true, selectedName, exported: exported[0], previewCleanup: true };
+    auto = { profiles, sourceDeck: true, seconds: (Date.now() - autoStart) / 1000, targetLufs: -4.5, playback: true, selectedName, exported: exported[0], previewCleanup: true };
   }
   const report = { app: appPath, input: fixture, output, seconds: (Date.now() - start) / 1000, progressCount: progress.length, progressMin: Math.min(...progress), progressMax: Math.max(...progress), bytes: fs.statSync(output).size, noOverwrite: true, auto };
   fs.writeFileSync(path.join(work, 'report.json'), JSON.stringify(report, null, 2));

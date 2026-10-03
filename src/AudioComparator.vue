@@ -302,14 +302,14 @@ onUnmounted(() => {
       <button class="compare-close" type="button" @click="emit('close')">Retour au mastering</button>
     </header>
 
-    <section v-if="generated" class="library-intro"><div><h2>Écoute tes trois rendus Hard Techno.</h2><p>Les variantes sont chargées automatiquement. Lance Lecture, passe de Fidèle à Dense ou Agressif, puis exporte le rendu choisi.</p></div></section>
+    <section v-if="generated" class="library-intro"><div><h2>Compare les trois masters et la source.</h2><p>Les quatre pistes sont chargées automatiquement. Écoute à volume égalisé pour juger le traitement, puis au niveau réel avant de choisir un master à exporter.</p></div></section>
     <aside v-if="generated && renderAnalysis" class="auto-analysis" aria-labelledby="auto-analysis-title">
       <div class="analysis-heading"><h2 id="auto-analysis-title">Analyse des rendus</h2><span>Cible <strong>{{ formatMeasurement(renderAnalysis.targetLufs) }} LUFS</strong> · plafond WAV −1 dBTP</span></div>
       <div class="analysis-context"><span>Source <strong>{{ formatMeasurement(renderAnalysis.source.integratedLufs) }} LUFS</strong></span><span v-if="renderAnalysis.referenceSegment">{{ renderAnalysis.usingDefaultReference ? 'Référence Hard Techno intégrée' : 'Référence utilisateur' }} · passage <strong>{{ formatMeasurement(renderAnalysis.referenceSegment.integratedLufs) }} LUFS</strong></span></div>
-      <p class="analysis-recommendation"><strong>{{ renderAnalysis.recommendedId ? 'Recommandation' : 'Aucun rendu recommandé' }}</strong>{{ renderAnalysis.recommendation }}</p>
+      <p class="analysis-recommendation"><strong>{{ renderAnalysis.recommendedId ? 'Conseil d’écoute WAV' : 'Aucun rendu recommandé' }}</strong>{{ renderAnalysis.recommendation }}</p>
       <p v-if="renderAnalysis.variants.some(variant => variant.referenceSimilarity != null)" class="reference-note">La similarité à la référence compare les passages analysés. Elle n’est pas une note de qualité et ne remplace pas les diagnostics.</p>
     </aside>
-    <p v-if="preparing" role="status" class="match-note">Préparation de l’écoute… {{ slots.length }} / {{ generatedTracks.length }} rendus prêts.</p>
+    <p v-if="preparing" role="status" class="match-note">Préparation de l’écoute… {{ slots.length }} / {{ generatedTracks.length }} pistes prêtes.</p>
     <p v-if="generated && trackError && !slots.length" class="compare-error" role="alert">{{ trackError }}</p>
     <template v-if="!generated">
     <section class="library-intro">
@@ -371,25 +371,27 @@ onUnmounted(() => {
       <p class="match-note">{{ matched ? 'Niveau d’écoute calé sur la piste la plus calme (aucun master n’est amplifié).' : 'Gain original, sans égalisation de loudness.' }} Le volume d’écoute reste réglable sur le PC.</p>
       <div class="deck-list" role="radiogroup" aria-label="Piste entendue">
         <article v-for="slot in slots" :key="slot.file.path" class="deck" :class="{ selected: slot.file.path === activePath }">
-          <div class="deck-heading"><label class="deck-radio"><input type="radio" name="active-master" :value="slot.file.path" :checked="slot.file.path === activePath" @change="selectDeck(slot.file.path)" /><span><strong>{{ slot.file.name }} <em v-if="slot.render && slot.render.id === renderAnalysis?.recommendedId" class="recommended-badge">Recommandé</em></strong><small>{{ slot.file.kind === 'source' ? 'Source' : slot.file.profile ? `Master ${displayProfile(slot.file.profile)}` : 'Rendu' }}</small></span></label><button v-if="!generated" class="remove-deck" type="button" :aria-label="`Retirer ${slot.file.name} de l’écoute`" @click="removeTrack(slot.file.path)">×</button></div>
+          <div class="deck-heading"><label class="deck-radio"><input type="radio" name="active-master" :value="slot.file.path" :checked="slot.file.path === activePath" @change="selectDeck(slot.file.path)" /><span><strong>{{ slot.file.name }} <em v-if="slot.render && slot.render.id === renderAnalysis?.recommendedId" class="recommended-badge">Écoute conseillée</em></strong><small>{{ slot.file.kind === 'source' ? 'Source non masterisée' : slot.file.profile ? `Master ${displayProfile(slot.file.profile)}` : 'Rendu' }}</small></span></label><button v-if="!generated" class="remove-deck" type="button" :aria-label="`Retirer ${slot.file.name} de l’écoute`" @click="removeTrack(slot.file.path)">×</button></div>
           <div class="waveform-row"><div class="waveform" :aria-label="`Forme d’onde de ${slot.file.name}`"><svg viewBox="0 0 240 48" preserveAspectRatio="none" aria-hidden="true"><rect v-for="(peak, index) in slot.analysis.waveform.peaks" :key="index" :x="index" :y="24 - Math.max(1, peak * 22)" width="0.72" :height="Math.max(2, peak * 44)" rx="0.25" /></svg><span class="waveform-cursor" :style="waveformStyle(slot)" /></div><span class="track-duration">{{ formatTime(slot.analysis.waveform.durationSeconds) }}</span></div>
-          <div class="deck-measures"><span>LUFS intégré <strong>{{ slot.analysis.measurements.integratedLufs.toFixed(1) }}</strong></span><span>True peak <strong>{{ slot.analysis.measurements.truePeakDbtp.toFixed(1) }} dBTP</strong></span><span>Facteur de crête <strong>{{ slot.analysis.measurements.peakFactorDb.toFixed(1) }} dB</strong></span><span>Grave relatif · 30–150 Hz <strong>{{ slot.analysis.measurements.bassRatioDb.toFixed(1) }} dB</strong></span><span class="aac-measure" :class="{ unsafe: slot.analysis.measurements.aacTruePeakDbtp != null && slot.analysis.measurements.aacTruePeakDbtp > 0 }">AAC · 256 kb/s <strong>{{ slot.analysis.measurements.aacTruePeakDbtp == null ? '—' : `${slot.analysis.measurements.aacTruePeakDbtp.toFixed(1)} dBTP` }}</strong></span><span v-if="matched">Gain d’écoute <strong>{{ gainLabel(slot) }}</strong></span></div>
+          <div class="decision-measures">
+            <div class="decision-measure level"><span>{{ slot.file.kind === 'source' ? 'Niveau de la source' : 'Niveau obtenu' }}</span><strong>{{ slot.analysis.measurements.integratedLufs.toFixed(1) }} LUFS</strong><small v-if="slot.render">{{ signedMeasurement(slot.render.achievedDeltaLu) }} LU par rapport à la cible</small></div>
+            <div class="decision-measure"><span>Crête du WAV</span><strong>{{ slot.analysis.measurements.truePeakDbtp.toFixed(1) }} dBTP</strong><small>{{ slot.file.kind === 'source' ? 'Avant mastering' : 'Plafond visé : −1 dBTP' }}</small></div>
+            <div v-if="slot.file.kind !== 'source' && slot.analysis.measurements.aacTruePeakDbtp != null" class="decision-measure" :class="{ unsafe: slot.analysis.measurements.aacTruePeakDbtp > 0 }"><span>Après conversion AAC · 256 kb/s</span><strong>{{ slot.analysis.measurements.aacTruePeakDbtp.toFixed(1) }} dBTP</strong><small>{{ slot.analysis.measurements.aacTruePeakDbtp > 0 ? 'Dépasse 0 dBTP · livraison AAC à vérifier' : 'Sous 0 dBTP avec cet encodeur' }}</small></div>
+          </div>
+          <div class="deck-measures"><span>Facteur de crête <strong>{{ slot.analysis.measurements.peakFactorDb.toFixed(1) }} dB</strong></span><span>Grave relatif · 30–150 Hz <strong>{{ slot.analysis.measurements.bassRatioDb.toFixed(1) }} dB</strong></span><span v-if="matched">Gain d’écoute <strong>{{ gainLabel(slot) }}</strong></span></div>
           <div v-if="generated && slot.render" class="render-analysis">
             <dl class="render-metrics">
-              <div><dt>Cible</dt><dd>{{ formatMeasurement(slot.render.targetLufs) }} LUFS</dd></div>
-              <div><dt>Écart à la cible</dt><dd>{{ signedMeasurement(slot.render.achievedDeltaLu) }} LU</dd></div>
               <div><dt>Facteur de crête · écart source</dt><dd>{{ signedMeasurement(-slot.render.peakFactorLossDb) }} dB</dd></div>
               <div><dt>Grave · écart source</dt><dd>{{ signedMeasurement(slot.render.bassChangeDb) }} dB</dd></div>
-              <div><dt>Tentatives</dt><dd>{{ slot.render.attempts }}</dd></div>
               <div v-if="slot.render.referenceSimilarity != null"><dt>Similarité à la référence</dt><dd>{{ slot.render.referenceSimilarity }}/100</dd></div>
             </dl>
-            <ul v-if="slot.render.diagnostics.length" class="render-diagnostics"><li v-for="note in slot.render.diagnostics" :key="note">{{ note }}</li></ul>
+            <details v-if="slot.render.diagnostics.length" class="render-details" open><summary>Points à vérifier · {{ slot.render.attempts }} tentative{{ slot.render.attempts > 1 ? 's' : '' }}</summary><ul class="render-diagnostics"><li v-for="note in slot.render.diagnostics" :key="note">{{ note }}</li></ul></details>
           </div>
           <audio :ref="element => setAudioRef(slot.file.path, element)" :src="convertFileSrc(slot.analysis.playbackPath)" preload="auto" @timeupdate="updatePlayhead(slot.file.path, $event)" @ended="ended(slot.file.path)" @error="playbackError(slot, $event)" />
         </article>
       </div>
       <div class="transport"><div class="transport-buttons"><button type="button" class="compare-primary" :disabled="playing || preparing" @click="play">Lecture</button><button type="button" class="compare-secondary" :disabled="!playing" @click="pause">Pause</button><button type="button" class="compare-secondary" @click="stop">Arrêter</button></div><div class="timeline"><span>{{ formatTime(playhead) }}</span><label class="sr-only" for="compare-seek">Position d’écoute</label><input id="compare-seek" type="range" min="0" :max="Math.max(1, duration)" step="0.05" :value="Math.min(playhead, duration)" @input="seek" /><span>{{ formatTime(duration) }}</span></div></div>
-      <div v-if="generated" class="transport"><span>{{ activeSlot?.file.name }}</span><button class="compare-primary" type="button" :disabled="preparing || !activeSlot || exporting || exportedPaths.includes(activePath)" @click="emit('export', activePath)">{{ exporting ? 'Export en cours…' : exportedPaths.includes(activePath) ? '✓ Master exporté' : 'Exporter ce rendu WAV' }}</button></div>
+      <div v-if="generated" class="transport"><span>{{ activeSlot?.file.name }}</span><button v-if="activeSlot?.file.kind !== 'source'" class="compare-primary" type="button" :disabled="preparing || !activeSlot || exporting || exportedPaths.includes(activePath)" @click="emit('export', activePath)">{{ exporting ? 'Export en cours…' : exportedPaths.includes(activePath) ? '✓ Master exporté' : 'Exporter ce rendu WAV' }}</button><span v-else class="source-label">Source pour comparaison · aucun export nécessaire</span></div>
       <p v-if="generated && exportOutput" class="library-root">{{ exportOutput }} <button class="compare-secondary" type="button" @click="emit('openFolder')">Ouvrir le dossier</button></p>
       <p v-if="generated && exportError" class="compare-error" role="alert">{{ exportError }}</p>
       <p class="measurement-note">Ces mesures décrivent des dimensions distinctes, pas une note globale. Le contrôle AAC est une simulation FFmpeg AAC à 256 kb/s, spécifique à cet encodeur; il ne certifie pas tous les services de diffusion.</p>
@@ -483,6 +485,15 @@ input, select { min-width: 0; border: 1px solid #3b4550; border-radius: 4px; pad
 .deck-measures span { display: flex; gap: 5px; }
 .deck-measures strong { color: #d5dde3; font-weight: 650; }
 .deck-measures .unsafe, .deck-measures .unsafe strong { color: #f1a38b; }
+.decision-measures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+.decision-measure { display: grid; align-content: start; gap: 3px; min-width: 0; border: 1px solid #33413f; border-radius: 5px; padding: 9px 11px; background: #182220; }
+.decision-measure span { color: #b8cbc6; font-size: 11px; }
+.decision-measure strong { color: #e8f2ed; font-size: 17px; font-variant-numeric: tabular-nums; }
+.decision-measure.level strong { font-size: 22px; }
+.decision-measure small { color: #aabbb6; font-size: 10px; line-height: 1.35; }
+.decision-measure.unsafe { border-color: #9e675b; background: #2b211f; }
+.decision-measure.unsafe strong, .decision-measure.unsafe small { color: #f1a38b; }
+.source-label { color: #aab5bf; font-size: 11px; }
 .deck audio { display: none; }
 .transport { flex-wrap: wrap; margin-top: 14px; }
 .transport-buttons { justify-content: flex-start; }
@@ -507,8 +518,10 @@ input, select { min-width: 0; border: 1px solid #3b4550; border-radius: 4px; pad
 .render-metrics dt { color: #adb7c1; font-size: 11px; line-height: 1.4; }
 .render-metrics dd { margin: 3px 0 0; color: #e0e8e5; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .render-diagnostics { display: grid; gap: 5px; margin: 12px 0 0; padding-left: 17px; color: #c4cdd1; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.render-details { margin-top: 12px; color: #adb7c1; font-size: 11px; }
+.render-details summary { width: fit-content; cursor: pointer; }
 @media (min-width: 1200px) { .render-diagnostics { grid-template-columns: 1fr 1fr; column-gap: 30px; } }
-@media (max-width: 760px) { .compare-shell { padding: 22px 18px; } .project-layout { grid-template-columns: 1fr; } .project-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 4px; } .project-list > .compare-eyebrow, .create-project { grid-column: 1 / -1; } .library-file { grid-template-columns: minmax(0, 1fr) auto; } .assign-control { grid-column: 1; } .add-file { grid-column: 2; grid-row: 1 / span 2; } }
-@media (max-width: 520px) { .compare-shell { padding: 17px 12px; } .compare-header, .library-intro { align-items: flex-start; } .compare-header { flex-wrap: wrap; } .library-intro { flex-direction: column; } .library-actions { width: 100%; } .library-actions button { flex: 1; } .volume-modes { grid-template-columns: 1fr; } .deck-measures { display: grid; grid-template-columns: 1fr 1fr; } .transport { align-items: stretch; } .timeline { flex-basis: 100%; } .unassigned-row { grid-template-columns: 1fr; gap: 5px; } .project-heading, .project-heading-actions, .unlink-confirmation { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 760px) { .compare-shell { padding: 22px 18px; } .project-layout { grid-template-columns: 1fr; } .project-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 4px; } .project-list > .compare-eyebrow, .create-project { grid-column: 1 / -1; } .library-file { grid-template-columns: minmax(0, 1fr) auto; } .assign-control { grid-column: 1; } .add-file { grid-column: 2; grid-row: 1 / span 2; } .decision-measures { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .compare-shell { padding: 17px 12px; } .compare-header, .library-intro { align-items: flex-start; } .compare-header { flex-wrap: wrap; } .library-intro { flex-direction: column; } .library-actions { width: 100%; } .library-actions button { flex: 1; } .volume-modes, .decision-measures { grid-template-columns: 1fr; } .deck-measures { display: grid; grid-template-columns: 1fr 1fr; } .transport { align-items: stretch; } .timeline { flex-basis: 100%; } .unassigned-row { grid-template-columns: 1fr; gap: 5px; } .project-heading, .project-heading-actions, .unlink-confirmation { align-items: flex-start; flex-direction: column; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 </style>

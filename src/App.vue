@@ -42,15 +42,20 @@ const exporting = ref(false);
 const exportedVariantIds = ref<string[]>([]);
 const exportedAacVariantIds = ref<string[]>([]);
 const previewPlayer = ref<HTMLAudioElement | null>(null);
-const comparisonTracks = computed(() => auto.value?.variants.map(variant => ({
-  path: variant.path, relativePath: variant.path.split(/[\\/]/).pop() || variant.path,
-  name: `${track.value?.name || 'Hard Techno'} · ${variant.profileLabel}`,
-  extension: 'WAV', kind: 'master', profile: variant.profileId, bytes: 0, variantId: variant.id,
-})) || []);
+const comparisonTracks = computed(() => auto.value ? [
+  ...auto.value.variants.map(variant => ({
+    path: variant.path, relativePath: variant.path.split(/[\\/]/).pop() || variant.path,
+    name: `${track.value?.name || 'Hard Techno'} · ${variant.profileLabel}`,
+    extension: 'WAV', kind: 'master', profile: variant.profileId, bytes: 0, variantId: variant.id,
+  })),
+  { path: auto.value.sourcePath, relativePath: auto.value.sourcePath.split(/[\\/]/).pop() || auto.value.sourcePath,
+    name: `${track.value?.name || 'Hard Techno'} · Source non masterisée`,
+    extension: 'WAV', kind: 'source', bytes: 0, variantId: 'source' },
+] : []);
 const comparisonSelectedPath = computed(() => auto.value?.variants.find(variant => variant.id === selected.value)?.path || '');
 const comparisonExportedPaths = computed(() => auto.value?.variants.filter(variant => exportedVariantIds.value.includes(variant.id)).map(variant => variant.path) || []);
-function selectComparisonTrack(path: string) { selected.value = auto.value?.variants.find(variant => variant.path === path)?.id || ''; }
-function exportComparisonTrack(path: string) { selectComparisonTrack(path); void exportSelected(); }
+function selectComparisonTrack(path: string) { const variant = auto.value?.variants.find(variant => variant.path === path); if (variant) selected.value = variant.id; }
+function exportComparisonTrack(path: string) { if (!auto.value?.variants.some(variant => variant.path === path)) return; selectComparisonTrack(path); void exportSelected(); }
 const settings = reactive({ loudness: -9, intensity: 1, preserveBass: false, dynamicBass: true, softClipDb: 0.5 });
 const autoSettings = reactive({ targetLufs: -5, sourceStart: 0, sourceDuration: 30, referenceStart: 0, referenceDuration: 30 });
 const busy = computed(() => status.value === "Processing");
