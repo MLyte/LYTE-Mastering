@@ -14,7 +14,7 @@ type Segment = { startSeconds: number; durationSeconds: number };
 type Waveform = { durationSeconds: number; peaks: number[] };
 type Measurements = { integratedLufs: number; truePeakDbtp: number; peakFactorDb: number; bassRatioDb: number; bandEnergyDb: number[]; aacTruePeakDbtp?: number };
 type Variant = { id: string; profileId: string; profileLabel: string; targetLufs: number; engineReferenceDb: number; achievedDeltaLu: number; attempts: number; path: string; measurements: Measurements; segmentMeasurements: Measurements; preserveBass: boolean; peakFactorLossDb: number; bassChangeDb: number; aacRisk: boolean; diagnostics: string[]; referenceSimilarity?: number };
-type AutoResult = { sessionId: string; sourcePath: string; source: Measurements; sourceSegment: Measurements; targetLufs: number; referencePath?: string; referenceSegment?: Measurements; referenceStartSeconds?: number; usingDefaultReference?: boolean; variants: Variant[]; recommendedId: string; recommendation: string };
+type AutoResult = { sessionId: string; sourcePath: string; source: Measurements; sourceSegment: Measurements; targetLufs: number; suggestedTargetLufs?: number | null; suggestedTargetProfileLabel?: string | null; suggestedTargetMeasuredLufs?: number | null; referencePath?: string; referenceSegment?: Measurements; referenceStartSeconds?: number; usingDefaultReference?: boolean; variants: Variant[]; recommendedId: string; recommendation: string };
 type MasterResult = { output: string; source: Measurements; master: Measurements };
 
 const status = ref<Status>("Idle");
@@ -98,6 +98,14 @@ async function master() {
     progress.value = 100; status.value = "Succeeded"; completionSound();
     if (auto.value) comparisonOpen.value = true;
   } catch (e) { fail(e); }
+}
+async function retryAtSuggestedTarget(target: number) {
+  if (!Number.isFinite(target) || target < -9 || target > -2 || busy.value || loading.value || !track.value) return;
+  autoSettings.targetLufs = Number(target.toFixed(1));
+  mode.value = "auto";
+  comparisonOpen.value = false;
+  await nextTick();
+  await master();
 }
 async function cancel() { try { await invoke("cancel_mastering"); } catch (e) { fail(e); } }
 async function exportSelected() { if (!auto.value || !selected.value || exporting.value || exportedVariantIds.value.includes(selected.value)) return; const variantId = selected.value; exporting.value = true; error.value = ""; try { output.value = await invoke<string>("export_auto_master", { sessionId: auto.value.sessionId, variantId }); exportedVariantIds.value = [...exportedVariantIds.value, variantId]; } catch (e) { fail(e); } finally { exporting.value = false; } }
@@ -226,5 +234,5 @@ onUnmounted(() => { cleanup.forEach(fn => fn()); resizeObserver?.disconnect(); p
     <div v-if="auto && selected" class="aac-export-options"><p>AAC 256 kb/s is a separate delivery copy. Any safety attenuation applies only to that encoded file; the WAV master above remains untouched.</p><button class="secondary" type="button" :disabled="exporting || exportedAacVariantIds.includes(selected)" @click="exportSelectedAac">{{ exporting ? 'Preparing AAC…' : exportedAacVariantIds.includes(selected) ? '✓ AAC delivery exported' : 'Export AAC-safe delivery (.m4a)' }}</button></div>
     <footer><span>PHASELIMITER ENGINE</span><span>Always on your computer.</span></footer>
   </main>
-  <AudioComparator v-else :render-analysis="auto || undefined" :generated-tracks="comparisonTracks" :session-id="auto?.sessionId" :selected-path="comparisonSelectedPath" :start-seconds="autoSettings.sourceStart" :exported-paths="comparisonExportedPaths" :exporting="exporting" :export-output="output" :export-error="error" @select="selectComparisonTrack" @export="exportComparisonTrack" @open-folder="openFolder" @close="comparisonOpen = false" @layout="scheduleWindowFit" />
+  <AudioComparator v-else :render-analysis="auto || undefined" :generated-tracks="comparisonTracks" :session-id="auto?.sessionId" :selected-path="comparisonSelectedPath" :start-seconds="autoSettings.sourceStart" :exported-paths="comparisonExportedPaths" :exporting="exporting" :export-output="output" :export-error="error" @select="selectComparisonTrack" @export="exportComparisonTrack" @open-folder="openFolder" @recalculate-target="retryAtSuggestedTarget" @close="comparisonOpen = false" @layout="scheduleWindowFit" />
 </template>

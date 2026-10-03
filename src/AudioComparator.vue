@@ -10,11 +10,11 @@ type ScanProgress = { scannedEntries: number; audioFiles: number };
 type Measurements = { integratedLufs: number; truePeakDbtp: number; peakFactorDb: number; bassRatioDb: number; aacTruePeakDbtp?: number | null };
 type Analysis = { playbackPath: string; track: { path: string; name: string; extension: string }; waveform: { durationSeconds: number; peaks: number[] }; measurements: Measurements };
 type RenderAnalysis = { id: string; path: string; targetLufs: number; achievedDeltaLu: number; attempts: number; peakFactorLossDb: number; bassChangeDb: number; aacRisk: boolean; diagnostics: string[]; referenceSimilarity?: number };
-type AutoAnalysis = { targetLufs: number; recommendedId: string; recommendation: string; source: { integratedLufs: number }; referenceSegment?: { integratedLufs: number }; usingDefaultReference?: boolean; variants: RenderAnalysis[] };
+type AutoAnalysis = { targetLufs: number; suggestedTargetLufs?: number | null; suggestedTargetProfileLabel?: string | null; suggestedTargetMeasuredLufs?: number | null; recommendedId: string; recommendation: string; source: { integratedLufs: number }; referenceSegment?: { integratedLufs: number }; usingDefaultReference?: boolean; variants: RenderAnalysis[] };
 type Slot = { file: LibraryFile; analysis: Analysis; render?: RenderAnalysis };
 type Project = { id: string; title: string; files: LibraryFile[] };
 const props = withDefaults(defineProps<{ renderAnalysis?: AutoAnalysis; generatedTracks?: LibraryFile[]; sessionId?: string; selectedPath?: string; startSeconds?: number; exportedPaths?: string[]; exporting?: boolean; exportOutput?: string; exportError?: string }>(), { generatedTracks: () => [], exportedPaths: () => [], startSeconds: 0 });
-const emit = defineEmits<{ close: []; layout: []; select: [path: string]; export: [path: string]; openFolder: [] }>();
+const emit = defineEmits<{ close: []; layout: []; select: [path: string]; export: [path: string]; openFolder: []; recalculateTarget: [target: number] }>();
 const generated = computed(() => Boolean(props.sessionId && props.generatedTracks.length));
 const preparing = ref(false);
 let disposed = false;
@@ -269,6 +269,10 @@ function gainLabel(slot: Slot) {
   return `${delta > 0 ? "+" : ""}${delta.toFixed(1)} dB`;
 }
 function formatMeasurement(value: number | undefined) { return Number.isFinite(value) ? Number(value).toFixed(1) : "—"; }
+function applySuggestedTarget() {
+  const target = props.renderAnalysis?.suggestedTargetLufs;
+  if (target != null) emit("recalculateTarget", target);
+}
 function signedMeasurement(value: number) { return Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}` : "—"; }
 function sizeLabel(bytes: number) { return bytes < 1_048_576 ? `${Math.max(1, Math.round(bytes / 1024))} Ko` : `${(bytes / 1_048_576).toFixed(1)} Mo`; }
 function toggleMode(equalized: boolean) { matched.value = equalized; updateVolumes(); }
@@ -307,6 +311,15 @@ onUnmounted(() => {
       <div class="analysis-heading"><h2 id="auto-analysis-title">Analyse des rendus</h2><span>Cible <strong>{{ formatMeasurement(renderAnalysis.targetLufs) }} LUFS</strong> · plafond WAV −1 dBTP</span></div>
       <div class="analysis-context"><span>Source <strong>{{ formatMeasurement(renderAnalysis.source.integratedLufs) }} LUFS</strong></span><span v-if="renderAnalysis.referenceSegment">{{ renderAnalysis.usingDefaultReference ? 'Référence Hard Techno intégrée' : 'Référence utilisateur' }} · passage <strong>{{ formatMeasurement(renderAnalysis.referenceSegment.integratedLufs) }} LUFS</strong></span></div>
       <p class="analysis-recommendation"><strong>{{ renderAnalysis.recommendedId ? 'Conseil d’écoute WAV' : 'Aucun rendu recommandé' }}</strong>{{ renderAnalysis.recommendation }}</p>
+      <div v-if="!renderAnalysis.recommendedId && renderAnalysis.suggestedTargetLufs != null" class="target-suggestion" role="group" aria-label="Cible suggérée à partir des rendus mesurés">
+        <div>
+          <p class="target-suggestion-label">Cible à réessayer d’après les mesures</p>
+          <strong class="target-suggestion-value">{{ formatMeasurement(renderAnalysis.suggestedTargetLufs) }} LUFS</strong>
+          <p>Cette proposition reprend le niveau mesuré de {{ renderAnalysis.suggestedTargetProfileLabel || 'un profil' }} ({{ formatMeasurement(renderAnalysis.suggestedTargetMeasuredLufs ?? undefined) }} LUFS), dont le WAV respecte les limites de crête, de facteur de crête et de grave. Le prochain rendu sera recalculé et contrôlé à nouveau.</p>
+          <small>Le contrôle AAC reste distinct.</small>
+        </div>
+        <button class="apply-target" type="button" @click="applySuggestedTarget">Appliquer et recalculer</button>
+      </div>
       <p v-if="renderAnalysis.variants.some(variant => variant.referenceSimilarity != null)" class="reference-note">La similarité à la référence compare les passages analysés. Elle n’est pas une note de qualité et ne remplace pas les diagnostics.</p>
     </aside>
     <p v-if="preparing" role="status" class="match-note">Préparation de l’écoute… {{ slots.length }} / {{ generatedTracks.length }} pistes prêtes.</p>
@@ -510,6 +523,15 @@ input, select { min-width: 0; border: 1px solid #3b4550; border-radius: 4px; pad
 .analysis-context { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 10px; }
 .analysis-recommendation { margin: 12px 0 0; color: #d6e3df; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .analysis-recommendation > strong { display: block; margin-bottom: 4px; color: #b3dfcd; }
+.target-suggestion { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px 24px; margin-top: 14px; border: 1px solid #6c9d8a; border-radius: 6px; padding: 13px 15px; background: #1c2b27; }
+.target-suggestion > div { flex: 1 1 340px; }
+.target-suggestion-label { margin: 0 0 3px; color: #b3dfcd; font-size: 11px; font-weight: 650; }
+.target-suggestion-value { color: #edf8f2; font-size: 20px; font-variant-numeric: tabular-nums; }
+.target-suggestion > div > p:not(.target-suggestion-label) { margin: 6px 0; color: #d0ddda; font-size: 12px; line-height: 1.5; }
+.target-suggestion small { color: #aab7b5; font-size: 11px; }
+.apply-target { flex: 0 0 auto; border: 1px solid #a4d7c7; border-radius: 5px; padding: 10px 13px; background: #233c35; color: #e8f6ef; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.apply-target:hover { background: #315448; }
+.apply-target:focus-visible { outline: 2px solid #d8f3e9; outline-offset: 2px; }
 .reference-note { margin: 9px 0 0; color: #adb7c1; font-size: 11px; line-height: 1.5; }
 .recommended-badge { display: inline-block; margin-left: 8px; border: 1px solid #6c9d8a; border-radius: 4px; padding: 2px 5px; color: #b3dfcd; font-size: 10px; font-style: normal; font-weight: 650; }
 .render-analysis { margin-top: 12px; border-top: 1px solid #2d3b3b; padding-top: 10px; }

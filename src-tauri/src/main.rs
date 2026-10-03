@@ -137,6 +137,9 @@ struct AutoResult {
     variants: Vec<AutoVariant>,
     recommended_id: String,
     delivery_ready: bool,
+    suggested_target_lufs: Option<f64>,
+    suggested_target_profile_label: Option<String>,
+    suggested_target_measured_lufs: Option<f64>,
     recommendation: String,
 }
 #[derive(Serialize)]
@@ -1087,6 +1090,26 @@ fn delivery_ready_for(variant: &AutoVariant) -> bool {
         .map(|profile| delivery_ready(variant, profile))
         .unwrap_or(false)
 }
+fn suggest_reachable_target<'a>(variants: &'a [AutoVariant], requested_target: f64) -> Option<(&'a AutoVariant, f64)> {
+    variants.iter().filter_map(|variant| {
+        let profile = AUTO_PROFILES.iter().copied().find(|profile| profile.id == variant.profile_id)?;
+        if !wav_within_budgets(variant, profile) || !variant.measurements.integrated_lufs.is_finite() {
+            return None;
+        }
+        let measured_lufs = variant.measurements.integrated_lufs;
+        let suggested_target = ((measured_lufs * 10.0).round() / 10.0)
+            .clamp(AUTO_TARGET_MIN_LUFS, AUTO_TARGET_MAX_LUFS);
+        if (measured_lufs - suggested_target).abs() > AUTO_TARGET_TOLERANCE_LU + 1e-9 {
+            return None;
+        }
+        Some((variant, suggested_target))
+    }).min_by(|(left, left_target), (right, right_target)| {
+        (left_target - requested_target).abs().total_cmp(&(right_target - requested_target).abs())
+            .then_with(|| left.peak_factor_loss_db.total_cmp(&right.peak_factor_loss_db))
+            .then_with(|| left.bass_change_db.abs().total_cmp(&right.bass_change_db.abs()))
+            .then_with(|| left.profile_id.cmp(&right.profile_id))
+    })
+}
 fn select_auto_candidate(variants: &[AutoVariant]) -> Option<&AutoVariant> {
     let within_budgets = |variant: &AutoVariant| AUTO_PROFILES.iter().copied()
         .find(|profile| profile.id == variant.profile_id)
@@ -1368,6 +1391,7 @@ async fn start_auto_mastering(
         let is_delivery_ready = variants.iter().any(delivery_ready_for);
         let selected = select_auto_candidate(&variants)
             .ok_or("The Auto profiles did not produce a master.")?;
+        let target_suggestion = if is_delivery_ready { None } else { suggest_reachable_target(&variants, automatic_target) };
         let recommended_id = if is_delivery_ready {
             selected.id.clone()
         } else {
@@ -1377,7 +1401,14 @@ async fn start_auto_mastering(
             format!("{} est proposé à l’écoute : {:.1} LUFS pour une cible de {:.1}, avec un WAV sous le plafond de crête et des variations de facteur de crête et de grave dans les limites du profil. Le choix suit les mesures : écart à la cible, perte de facteur de crête, variation du grave, puis similarité à la référence. Ce classement est une aide au choix, pas une note de qualité sonore. {}", selected.profile_label, selected.measurements.integrated_lufs, automatic_target,
                 if selected.aac_risk { "La conversion AAC directe dépasse 0 dBTP : prévoir l’export AAC adapté séparément." } else { "Le contrôle AAC est indiqué séparément." })
         } else {
-            "Aucun profil ne respecte ensemble la cible à ±0,3 LU, le plafond WAV et les limites de facteur de crête et de grave. Compare les trois rendus à la source à volume égalisé ; conserve la source ou revois la cible et le mix si aucun rendu ne te convient. Le contrôle AAC reste distinct.".into()
+            match target_suggestion {
+                Some((variant, target)) => format!("Aucun profil ne respecte la cible de {:.1} LUFS avec les limites WAV. Les mesures suggèrent de réessayer à {:.1} LUFS, niveau du profil {} qui respecte le plafond WAV et ses limites de facteur de crête et de grave. Le prochain rendu sera recalculé et remesuré ; le contrôle AAC reste distinct.", automatic_target, target, variant.profile_label),
+                None => "Aucun profil ne respecte ensemble la cible à ±0,3 LU, le plafond WAV et les limites de facteur de crête et de grave. Les rendus mesurés dépassent aussi au moins une limite WAV : changer la cible seule ne permet pas de proposer un niveau de livraison sûr. Compare les pistes à volume égalisé ; conserve la source ou revois le mix. Le contrôle AAC reste distinct.".into()
+            }
+        };
+        let (suggested_target_lufs, suggested_target_profile_label, suggested_target_measured_lufs) = match target_suggestion {
+            Some((variant, target)) => (Some(target), Some(variant.profile_label.clone()), Some(variant.measurements.integrated_lufs)),
+            None => (None, None, None),
         };
         *worker
             .state::<AppState>()
@@ -1404,6 +1435,9 @@ async fn start_auto_mastering(
             variants,
             recommended_id,
             delivery_ready: is_delivery_ready,
+            suggested_target_lufs,
+            suggested_target_profile_label,
+            suggested_target_measured_lufs,
             recommendation,
         })
     })
