@@ -116,6 +116,8 @@ struct AutoVariant {
     measurements: Measurements,
     segment_measurements: Measurements,
     preserve_bass: bool,
+    crest_budget_db: f64,
+    bass_budget_db: f64,
     peak_factor_loss_db: f64,
     bass_change_db: f64,
     aac_risk: bool,
@@ -1186,6 +1188,8 @@ fn render_profile_attempt(
         measurements,
         segment_measurements,
         preserve_bass: profile.preserve_bass,
+        crest_budget_db: profile.crest_budget_db,
+        bass_budget_db: profile.bass_budget_db,
         peak_factor_loss_db: 0.0,
         bass_change_db: 0.0,
         aac_risk: false,
@@ -1691,7 +1695,8 @@ mod tests {
         AutoVariant { id: profile.id.into(), profile_id: profile.id.into(), profile_label: profile.label.into(),
             target_lufs: -5.0, engine_reference_db: -5.0, achieved_delta_lu: lufs + 5.0, attempts: 1,
             path: String::new(), measurements: measurements.clone(), segment_measurements: measurements,
-            preserve_bass: profile.preserve_bass, peak_factor_loss_db: 1.0, bass_change_db: 0.0,
+            preserve_bass: profile.preserve_bass, crest_budget_db: profile.crest_budget_db,
+            bass_budget_db: profile.bass_budget_db, peak_factor_loss_db: 1.0, bass_change_db: 0.0,
             aac_risk: true, diagnostics: vec![], reference_similarity: Some(90) }
     }
     #[test]
@@ -1955,6 +1960,8 @@ mod tests {
             },
             segment_measurements: source.clone(),
             preserve_bass: false,
+            crest_budget_db: AUTO_PROFILES[2].crest_budget_db,
+            bass_budget_db: AUTO_PROFILES[2].bass_budget_db,
             peak_factor_loss_db: 0.0,
             bass_change_db: 0.0,
             aac_risk: false,

@@ -13,7 +13,7 @@ type Track = { path: string; name: string; extension: string };
 type Segment = { startSeconds: number; durationSeconds: number };
 type Waveform = { durationSeconds: number; peaks: number[] };
 type Measurements = { integratedLufs: number; truePeakDbtp: number; peakFactorDb: number; bassRatioDb: number; bandEnergyDb: number[]; aacTruePeakDbtp?: number };
-type Variant = { id: string; profileId: string; profileLabel: string; targetLufs: number; engineReferenceDb: number; achievedDeltaLu: number; attempts: number; path: string; measurements: Measurements; segmentMeasurements: Measurements; preserveBass: boolean; peakFactorLossDb: number; bassChangeDb: number; aacRisk: boolean; diagnostics: string[]; referenceSimilarity?: number };
+type Variant = { id: string; profileId: string; profileLabel: string; targetLufs: number; engineReferenceDb: number; achievedDeltaLu: number; attempts: number; path: string; measurements: Measurements; segmentMeasurements: Measurements; preserveBass: boolean; crestBudgetDb: number; bassBudgetDb: number; peakFactorLossDb: number; bassChangeDb: number; aacRisk: boolean; diagnostics: string[]; referenceSimilarity?: number };
 type AutoResult = { sessionId: string; sourcePath: string; source: Measurements; sourceSegment: Measurements; targetLufs: number; suggestedTargetLufs?: number | null; suggestedTargetProfileLabel?: string | null; suggestedTargetMeasuredLufs?: number | null; referencePath?: string; referenceSegment?: Measurements; referenceStartSeconds?: number; usingDefaultReference?: boolean; variants: Variant[]; recommendedId: string; recommendation: string };
 type MasterResult = { output: string; source: Measurements; master: Measurements };
 

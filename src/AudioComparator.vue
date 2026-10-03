@@ -9,7 +9,7 @@ type LibraryScan = { root: string; files: LibraryFile[]; scannedEntries: number;
 type ScanProgress = { scannedEntries: number; audioFiles: number };
 type Measurements = { integratedLufs: number; truePeakDbtp: number; peakFactorDb: number; bassRatioDb: number; aacTruePeakDbtp?: number | null };
 type Analysis = { playbackPath: string; track: { path: string; name: string; extension: string }; waveform: { durationSeconds: number; peaks: number[] }; measurements: Measurements };
-type RenderAnalysis = { id: string; path: string; targetLufs: number; achievedDeltaLu: number; attempts: number; peakFactorLossDb: number; bassChangeDb: number; aacRisk: boolean; diagnostics: string[]; referenceSimilarity?: number };
+type RenderAnalysis = { id: string; path: string; targetLufs: number; achievedDeltaLu: number; attempts: number; crestBudgetDb: number; bassBudgetDb: number; peakFactorLossDb: number; bassChangeDb: number; aacRisk: boolean; diagnostics: string[]; referenceSimilarity?: number };
 type AutoAnalysis = { targetLufs: number; suggestedTargetLufs?: number | null; suggestedTargetProfileLabel?: string | null; suggestedTargetMeasuredLufs?: number | null; recommendedId: string; recommendation: string; source: { integratedLufs: number }; referenceSegment?: { integratedLufs: number }; usingDefaultReference?: boolean; variants: RenderAnalysis[] };
 type Slot = { file: LibraryFile; analysis: Analysis; render?: RenderAnalysis };
 type Project = { id: string; title: string; files: LibraryFile[] };
@@ -274,6 +274,29 @@ function applySuggestedTarget() {
   if (target != null) emit("recalculateTarget", target);
 }
 function signedMeasurement(value: number) { return Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}` : "—"; }
+function meterPercent(value: number, min: number, max: number) { return Number.isFinite(value) ? Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100)) : 0; }
+function rangeMeterStyle(value: number, min: number, max: number, safeMin: number, safeMax: number) {
+  return `--meter-marker:${meterPercent(value, min, max)}%;--meter-safe-start:${meterPercent(safeMin, min, max)}%;--meter-safe-end:${meterPercent(safeMax, min, max)}%`;
+}
+function peakMeterStyle(value: number) {
+  return `--meter-marker:${meterPercent(value, -12, 0)}%;--meter-limit-position:${meterPercent(-1, -12, 0)}%;--meter-warn-start:${meterPercent(-2, -12, 0)}%;--meter-safe-end:${meterPercent(-1, -12, 0)}%`;
+}
+function aacMeterStyle(value: number) { return `--meter-marker:${meterPercent(value, -6, 6)}%;--meter-limit-position:${meterPercent(0, -6, 6)}%;--meter-safe-end:${meterPercent(0, -6, 6)}%`; }
+function crestMeterStyle(loss: number, budget: number) {
+  const max = budget + 2;
+  return `--meter-marker:${meterPercent(Math.max(0, loss), 0, max)}%;--meter-safe-end:${meterPercent(budget, 0, max)}%;--meter-warn-start:${meterPercent(budget * .75, 0, max)}%`;
+}
+function lufsDelta(slot: Slot) { return slot.render?.achievedDeltaLu ?? (props.renderAnalysis ? slot.analysis.measurements.integratedLufs - props.renderAnalysis.targetLufs : null); }
+function lufsState(delta: number) { return Math.abs(delta) <= .3 ? 'Dans la tolérance' : delta < 0 ? (delta < -1 ? 'Sous la cible' : 'Un peu sous la cible') : (delta > 1 ? 'Au-dessus de la cible' : 'Un peu au-dessus'); }
+function lufsStateClass(delta: number) { return Math.abs(delta) <= .3 ? 'safe' : Math.abs(delta) <= 1 ? 'near' : 'over'; }
+function peakState(value: number) { return value > -1 ? 'Au-dessus du plafond' : value >= -1.05 ? 'Au plafond visé' : value > -2 ? 'Proche du plafond' : 'Sous le plafond'; }
+function peakStateClass(value: number) { return value > -1 ? 'over' : value >= -1.05 ? 'near' : 'safe'; }
+function crestState(loss: number, budget: number) { return loss <= 0 ? 'Pas de baisse mesurée' : loss > budget ? 'Au-delà du budget du profil' : loss >= budget * .75 ? 'Proche de la limite du profil' : 'Dans le budget du profil'; }
+function crestStateClass(loss: number, budget: number) { return loss > budget ? 'over' : loss >= budget * .75 ? 'near' : 'safe'; }
+function bassState(change: number, budget: number) { return Math.abs(change) > budget ? 'Au-delà du budget du profil' : Math.abs(change) >= budget * .75 ? 'Proche de la limite du profil' : 'Dans le budget du profil'; }
+function bassStateClass(change: number, budget: number) { return Math.abs(change) > budget ? 'over' : Math.abs(change) >= budget * .75 ? 'near' : 'safe'; }
+function aacState(value: number) { return value > 0 ? 'Dépasse le repère 0 dBTP' : value > -1 ? 'Proche du repère 0 dBTP' : 'Sous le repère 0 dBTP'; }
+function aacStateClass(value: number) { return value > 0 ? 'over' : value > -1 ? 'near' : 'safe'; }
 function sizeLabel(bytes: number) { return bytes < 1_048_576 ? `${Math.max(1, Math.round(bytes / 1024))} Ko` : `${(bytes / 1_048_576).toFixed(1)} Mo`; }
 function toggleMode(equalized: boolean) { matched.value = equalized; updateVolumes(); }
 function ended(path: string) { if (path === activePath.value) pause(); }
@@ -387,15 +410,55 @@ onUnmounted(() => {
           <div class="deck-heading"><label class="deck-radio"><input type="radio" name="active-master" :value="slot.file.path" :checked="slot.file.path === activePath" @change="selectDeck(slot.file.path)" /><span><strong>{{ slot.file.name }} <em v-if="slot.render && slot.render.id === renderAnalysis?.recommendedId" class="recommended-badge">Écoute conseillée</em></strong><small>{{ slot.file.kind === 'source' ? 'Source non masterisée' : slot.file.profile ? `Master ${displayProfile(slot.file.profile)}` : 'Rendu' }}</small></span></label><button v-if="!generated" class="remove-deck" type="button" :aria-label="`Retirer ${slot.file.name} de l’écoute`" @click="removeTrack(slot.file.path)">×</button></div>
           <div class="waveform-row"><div class="waveform" :aria-label="`Forme d’onde de ${slot.file.name}`"><svg viewBox="0 0 240 48" preserveAspectRatio="none" aria-hidden="true"><rect v-for="(peak, index) in slot.analysis.waveform.peaks" :key="index" :x="index" :y="24 - Math.max(1, peak * 22)" width="0.72" :height="Math.max(2, peak * 44)" rx="0.25" /></svg><span class="waveform-cursor" :style="waveformStyle(slot)" /></div><span class="track-duration">{{ formatTime(slot.analysis.waveform.durationSeconds) }}</span></div>
           <div class="decision-measures">
-            <div class="decision-measure level"><span>{{ slot.file.kind === 'source' ? 'Niveau de la source' : 'Niveau obtenu' }}</span><strong>{{ slot.analysis.measurements.integratedLufs.toFixed(1) }} LUFS</strong><small v-if="slot.render">{{ signedMeasurement(slot.render.achievedDeltaLu) }} LU par rapport à la cible</small></div>
-            <div class="decision-measure"><span>Crête du WAV</span><strong>{{ slot.analysis.measurements.truePeakDbtp.toFixed(1) }} dBTP</strong><small>{{ slot.file.kind === 'source' ? 'Avant mastering' : 'Plafond visé : −1 dBTP' }}</small></div>
-            <div v-if="slot.file.kind !== 'source' && slot.analysis.measurements.aacTruePeakDbtp != null" class="decision-measure" :class="{ unsafe: slot.analysis.measurements.aacTruePeakDbtp > 0 }"><span>Après conversion AAC · 256 kb/s</span><strong>{{ slot.analysis.measurements.aacTruePeakDbtp.toFixed(1) }} dBTP</strong><small>{{ slot.analysis.measurements.aacTruePeakDbtp > 0 ? 'Dépasse 0 dBTP · livraison AAC à vérifier' : 'Sous 0 dBTP avec cet encodeur' }}</small></div>
+            <div class="decision-measure level">
+              <span>{{ slot.file.kind === 'source' ? 'Niveau intégré de la source' : 'Niveau intégré du master' }}</span>
+              <strong>{{ slot.analysis.measurements.integratedLufs.toFixed(1) }} LUFS</strong>
+              <small v-if="renderAnalysis && lufsDelta(slot) != null" class="metric-state" :class="lufsStateClass(lufsDelta(slot) ?? 0)">{{ signedMeasurement(lufsDelta(slot) ?? 0) }} LU vs cible · {{ lufsState(lufsDelta(slot) ?? 0) }}</small>
+              <div v-if="renderAnalysis" class="meter-block" role="img" :aria-label="`Écart LUFS à la cible : ${signedMeasurement(lufsDelta(slot) ?? 0)} LU. La zone verte indique la tolérance de plus ou moins 0,3 LU.`">
+                <div class="meter-track meter-target" :style="rangeMeterStyle(lufsDelta(slot) ?? 0, -3, 3, -.3, .3)"><i class="meter-limit" /><i class="meter-marker" /></div>
+                <div class="meter-scale"><span>−3 LU</span><span>cible ±0,3</span><span>+3 LU</span></div>
+              </div>
+            </div>
+            <div class="decision-measure" :class="{ unsafe: slot.file.kind !== 'source' && peakStateClass(slot.analysis.measurements.truePeakDbtp) === 'over', nearLimit: slot.file.kind !== 'source' && peakStateClass(slot.analysis.measurements.truePeakDbtp) === 'near' }">
+              <span>Crête vraie du WAV</span>
+              <strong>{{ slot.analysis.measurements.truePeakDbtp.toFixed(1) }} dBTP</strong>
+              <small class="metric-state" :class="slot.file.kind === 'source' ? '' : peakStateClass(slot.analysis.measurements.truePeakDbtp)">{{ slot.file.kind === 'source' ? 'Mesure avant mastering · repère de sortie −1 dBTP' : `${peakState(slot.analysis.measurements.truePeakDbtp)} · repère −1 dBTP` }}</small>
+              <div class="meter-block" role="img" :aria-label="`Crête vraie ${formatMeasurement(slot.analysis.measurements.truePeakDbtp)} dBTP. Repère du plafond WAV de sortie : moins 1 dBTP.`">
+                <div class="meter-track" :class="slot.file.kind === 'source' ? 'meter-source' : 'meter-peak'" :style="peakMeterStyle(slot.analysis.measurements.truePeakDbtp)"><i class="meter-limit" /><i class="meter-marker" /></div>
+                <div class="meter-scale"><span>−12 dBTP</span><span>0 dBTP</span></div>
+              </div>
+              <small>{{ slot.file.kind === 'source' ? 'Source avant mastering · plafond de livraison' : 'Plafond de livraison WAV' }}</small>
+            </div>
+            <div v-if="slot.file.kind !== 'source' && slot.analysis.measurements.aacTruePeakDbtp != null" class="decision-measure" :class="{ unsafe: aacStateClass(slot.analysis.measurements.aacTruePeakDbtp) === 'over', nearLimit: aacStateClass(slot.analysis.measurements.aacTruePeakDbtp) === 'near' }">
+              <span>Crête après conversion AAC · 256 kb/s</span>
+              <strong>{{ slot.analysis.measurements.aacTruePeakDbtp.toFixed(1) }} dBTP</strong>
+              <small class="metric-state" :class="aacStateClass(slot.analysis.measurements.aacTruePeakDbtp)">{{ aacState(slot.analysis.measurements.aacTruePeakDbtp) }}</small>
+              <div class="meter-block" role="img" :aria-label="`Crête après la simulation AAC : ${formatMeasurement(slot.analysis.measurements.aacTruePeakDbtp)} dBTP. Repère de contrôle zéro dBTP.`">
+                <div class="meter-track meter-aac" :style="aacMeterStyle(slot.analysis.measurements.aacTruePeakDbtp)"><i class="meter-limit" /><i class="meter-marker" /></div>
+                <div class="meter-scale"><span>−6 dBTP</span><span>+6 dBTP</span></div>
+              </div>
+              <small>Simulation de cet encodeur · contrôle séparé du WAV</small>
+            </div>
           </div>
           <div class="deck-measures"><span>Facteur de crête <strong>{{ slot.analysis.measurements.peakFactorDb.toFixed(1) }} dB</strong></span><span>Grave relatif · 30–150 Hz <strong>{{ slot.analysis.measurements.bassRatioDb.toFixed(1) }} dB</strong></span><span v-if="matched">Gain d’écoute <strong>{{ gainLabel(slot) }}</strong></span></div>
           <div v-if="generated && slot.render" class="render-analysis">
             <dl class="render-metrics">
-              <div><dt>Facteur de crête · écart source</dt><dd>{{ signedMeasurement(-slot.render.peakFactorLossDb) }} dB</dd></div>
-              <div><dt>Grave · écart source</dt><dd>{{ signedMeasurement(slot.render.bassChangeDb) }} dB</dd></div>
+              <div class="render-meter">
+                <dt>Écart du facteur de crête · master − source</dt><dd>{{ signedMeasurement(-slot.render.peakFactorLossDb) }} dB</dd>
+                <div class="meter-block" role="img" :aria-label="`Baisse du facteur de crête ${formatMeasurement(slot.render.peakFactorLossDb)} dB. Budget ${formatMeasurement(slot.render.crestBudgetDb)} dB pour le profil ${slot.file.profile || ''}.`">
+                  <div class="meter-track meter-budget" :style="crestMeterStyle(slot.render.peakFactorLossDb, slot.render.crestBudgetDb)"><i class="meter-marker" /></div>
+                  <div class="meter-scale"><span>0 baisse</span><span>budget {{ formatMeasurement(slot.render.crestBudgetDb) }} dB</span><span>au-delà</span></div>
+                </div>
+                <small class="metric-state" :class="crestStateClass(slot.render.peakFactorLossDb, slot.render.crestBudgetDb)">{{ crestState(slot.render.peakFactorLossDb, slot.render.crestBudgetDb) }}</small>
+              </div>
+              <div class="render-meter">
+                <dt>Grave 30–150 Hz · master − source</dt><dd>{{ signedMeasurement(slot.render.bassChangeDb) }} dB</dd>
+                <div class="meter-block" role="img" :aria-label="`Variation du grave ${signedMeasurement(slot.render.bassChangeDb)} dB. Budget plus ou moins ${formatMeasurement(slot.render.bassBudgetDb)} dB pour le profil ${slot.file.profile || ''}.`">
+                  <div class="meter-track meter-symmetric" :style="rangeMeterStyle(slot.render.bassChangeDb, -6, 6, -slot.render.bassBudgetDb, slot.render.bassBudgetDb)"><i class="meter-marker" /></div>
+                  <div class="meter-scale"><span>−6 dB</span><span>budget ±{{ formatMeasurement(slot.render.bassBudgetDb) }}</span><span>+6 dB</span></div>
+                </div>
+                <small class="metric-state" :class="bassStateClass(slot.render.bassChangeDb, slot.render.bassBudgetDb)">{{ bassState(slot.render.bassChangeDb, slot.render.bassBudgetDb) }}</small>
+              </div>
               <div v-if="slot.render.referenceSimilarity != null"><dt>Similarité à la référence</dt><dd>{{ slot.render.referenceSimilarity }}/100</dd></div>
             </dl>
             <details v-if="slot.render.diagnostics.length" class="render-details" open><summary>Points à vérifier · {{ slot.render.attempts }} tentative{{ slot.render.attempts > 1 ? 's' : '' }}</summary><ul class="render-diagnostics"><li v-for="note in slot.render.diagnostics" :key="note">{{ note }}</li></ul></details>
@@ -403,6 +466,7 @@ onUnmounted(() => {
           <audio :ref="element => setAudioRef(slot.file.path, element)" :src="convertFileSrc(slot.analysis.playbackPath)" preload="auto" @timeupdate="updatePlayhead(slot.file.path, $event)" @ended="ended(slot.file.path)" @error="playbackError(slot, $event)" />
         </article>
       </div>
+      <div class="meter-legend" aria-label="Légende des jauges"><span><i class="legend-good" /> Dans la cible ou le budget</span><span><i class="legend-near" /> Proche de la limite</span><span><i class="legend-over" /> Écart marqué ou limite dépassée</span></div>
       <div class="transport"><div class="transport-buttons"><button type="button" class="compare-primary" :disabled="playing || preparing" @click="play">Lecture</button><button type="button" class="compare-secondary" :disabled="!playing" @click="pause">Pause</button><button type="button" class="compare-secondary" @click="stop">Arrêter</button></div><div class="timeline"><span>{{ formatTime(playhead) }}</span><label class="sr-only" for="compare-seek">Position d’écoute</label><input id="compare-seek" type="range" min="0" :max="Math.max(1, duration)" step="0.05" :value="Math.min(playhead, duration)" @input="seek" /><span>{{ formatTime(duration) }}</span></div></div>
       <div v-if="generated" class="transport"><span>{{ activeSlot?.file.name }}</span><button v-if="activeSlot?.file.kind !== 'source'" class="compare-primary" type="button" :disabled="preparing || !activeSlot || exporting || exportedPaths.includes(activePath)" @click="emit('export', activePath)">{{ exporting ? 'Export en cours…' : exportedPaths.includes(activePath) ? '✓ Master exporté' : 'Exporter ce rendu WAV' }}</button><span v-else class="source-label">Source pour comparaison · aucun export nécessaire</span></div>
       <p v-if="generated && exportOutput" class="library-root">{{ exportOutput }} <button class="compare-secondary" type="button" @click="emit('openFolder')">Ouvrir le dossier</button></p>
@@ -506,6 +570,32 @@ input, select { min-width: 0; border: 1px solid #3b4550; border-radius: 4px; pad
 .decision-measure small { color: #aabbb6; font-size: 10px; line-height: 1.35; }
 .decision-measure.unsafe { border-color: #9e675b; background: #2b211f; }
 .decision-measure.unsafe strong, .decision-measure.unsafe small { color: #f1a38b; }
+.decision-measure.nearLimit { border-color: #9b8151; background: #29251d; }
+.decision-measure.nearLimit strong, .decision-measure.nearLimit .metric-state { color: #e8c77f; }
+.metric-state.safe { color: #a9dec6; }
+.metric-state.near { color: #e8c77f; }
+.metric-state.over { color: #f1a38b; }
+.meter-block { display: grid; gap: 5px; min-width: 0; margin-top: 6px; }
+.meter-track { position: relative; height: 9px; overflow: visible; border: 1px solid #3c4847; border-radius: 999px; background-color: #292522; }
+.meter-track::before { position: absolute; inset: 0; border-radius: inherit; content: ""; }
+.meter-target::before { background: linear-gradient(90deg, #995b50 0%, #995b50 33.33%, #9a804a 33.33%, #9a804a 45%, #4e9878 45%, #4e9878 55%, #9a804a 55%, #9a804a 66.67%, #995b50 66.67%, #995b50 100%); }
+.meter-peak::before { background: linear-gradient(90deg, #4e9878 0%, #4e9878 var(--meter-warn-start), #b18a4c var(--meter-warn-start), #b18a4c var(--meter-safe-end), #a55047 var(--meter-safe-end), #a55047 100%); }
+.meter-source::before { background: #43534f; }
+.meter-aac::before { background: linear-gradient(90deg, #4e9878 0%, #4e9878 var(--meter-safe-end), #a55047 var(--meter-safe-end), #a55047 100%); }
+.meter-budget::before { background: linear-gradient(90deg, #4e9878 0%, #4e9878 var(--meter-warn-start), #b18a4c var(--meter-warn-start), #b18a4c var(--meter-safe-end), #a55047 var(--meter-safe-end), #a55047 100%); }
+.meter-symmetric::before { inset-inline-start: var(--meter-safe-start); width: calc(var(--meter-safe-end) - var(--meter-safe-start)); background: #4e9878; }
+.meter-limit { position: absolute; z-index: 1; top: -3px; bottom: -3px; left: var(--meter-limit-position, 50%); width: 2px; border-radius: 2px; background: #f6eee0; opacity: .9; }
+.meter-marker { position: absolute; z-index: 2; top: -4px; bottom: -4px; left: var(--meter-marker, 50%); width: 3px; border: 1px solid #111719; border-radius: 3px; background: #f4f7f4; box-shadow: 0 0 0 1px #f4f7f477; transform: translateX(-50%); }
+.meter-scale { display: flex; justify-content: space-between; gap: 6px; color: #9eaaa7; font-size: 9px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.meter-scale span:nth-child(2):not(:last-child) { text-align: center; }
+.render-meter { display: grid; align-content: start; gap: 3px; }
+.render-meter .metric-state { display: block; }
+.meter-legend { display: flex; flex-wrap: wrap; gap: 7px 18px; margin: 11px 0 0; color: #b3bfbd; font-size: 10px; }
+.meter-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.meter-legend i { width: 10px; height: 10px; border-radius: 50%; }
+.legend-good { background: #4e9878; }
+.legend-near { background: #b18a4c; }
+.legend-over { background: #a55047; }
 .source-label { color: #aab5bf; font-size: 11px; }
 .deck audio { display: none; }
 .transport { flex-wrap: wrap; margin-top: 14px; }
