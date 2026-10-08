@@ -4,7 +4,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { LogicalSize } from "@tauri-apps/api/dpi";
-import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import AudioComparator from "./AudioComparator.vue";
 
@@ -59,6 +59,17 @@ function exportComparisonTrack(path: string) { if (!auto.value?.variants.some(va
 const settings = reactive({ loudness: -9, intensity: 1, preserveBass: false, dynamicBass: true, softClipDb: 0.5 });
 const autoSettings = reactive({ targetLufs: -5, sourceStart: 0, sourceDuration: 30, referenceStart: 0, referenceDuration: 30 });
 const busy = computed(() => status.value === "Processing");
+// Keep Windows' taskbar indicator in step with the progress shown in the app.
+// Serialize updates so a late engine event cannot restore it after completion.
+let taskbarUpdate = Promise.resolve();
+watch([busy, progress], ([isBusy, percent]) => {
+  const state = !isBusy
+    ? { status: ProgressBarStatus.None }
+    : percent > 0
+      ? { status: ProgressBarStatus.Normal, progress: Math.min(99, Math.round(percent)) }
+      : { status: ProgressBarStatus.Indeterminate };
+  taskbarUpdate = taskbarUpdate.then(() => getCurrentWindow().setProgressBar(state)).catch(() => {});
+});
 const hasResult = computed(() => Boolean(auto.value || manual.value));
 const stage = computed<"import" | "setup" | "processing" | "result">(() => !track.value ? "import" : busy.value ? "processing" : hasResult.value ? "result" : "setup");
 const sourceSegment = computed<Segment>(() => ({ startSeconds: autoSettings.sourceStart, durationSeconds: autoSettings.sourceDuration }));
